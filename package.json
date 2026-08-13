@@ -1,7 +1,7 @@
 {
   "name": "av-music",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Reproductor de música local con visualizador reactivo",
   "scripts": {
