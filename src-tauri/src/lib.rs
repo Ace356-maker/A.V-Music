@@ -803,14 +803,7 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
     // YT Music, sin compositores) ganan sobre los de yt-dlp para los vídeos
     // que ambas consultas comparten.
     if let Ok(exact_info) = exact_rx.recv_timeout(std::time::Duration::from_secs(12)) {
-        for hit in &mut hits {
-            if let Some((exact_title, exact_artists)) = exact_info.get(&hit.id) {
-                hit.title = exact_title.clone();
-                if !exact_artists.is_empty() {
-                    hit.artists = exact_artists.clone();
-                }
-            }
-        }
+        apply_exact_info(&mut hits, &exact_info);
     }
 
     // Los canales " - Topic" (audio puro de YouTube Music) primero; el resto
@@ -823,6 +816,76 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
     });
 
     Ok(hits)
+}
+
+/// Normaliza un título para comparar entre fuentes (yt-dlp vs API de YT
+/// Music): minúsculas y sin el contenido de los paréntesis/corchetes ("Mind
+/// On You (con charlieonnafriday)" → "mind on you"). Los signos de
+/// puntuación se colapsan en un espacio; se devuelve "" si queda vacío.
+fn normalize_match_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut depth = 0usize;
+    for c in title.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => {
+                if c.is_ascii_alphanumeric() {
+                    out.push(c.to_ascii_lowercase());
+                } else if !out.is_empty() && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Aplica los datos EXACTOS de la API de YT Music sobre los hits de yt-dlp:
+/// primero por videoId (título exacto + intérpretes puros, sin compositores);
+/// si un videoId no apareció en la API (los resultados de ambas fuentes a
+/// veces difieren), se rescatan SOLO los intérpretes por título normalizado,
+/// y únicamente cuando coincide con UN resultado de la API (con varios no se
+/// arriesga a equivocar el crédito). El título NO se toca en ese respaldo:
+/// el exacto ya lo aporta la fusión por videoId.
+fn apply_exact_info(
+    hits: &mut [SearchHit],
+    exact: &std::collections::HashMap<String, (String, Vec<String>)>,
+) {
+    let mut merged: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for hit in hits.iter_mut() {
+        if let Some((exact_title, exact_artists)) = exact.get(&hit.id) {
+            hit.title = exact_title.clone();
+            if !exact_artists.is_empty() {
+                hit.artists = exact_artists.clone();
+                merged.insert(hit.id.clone());
+            }
+        }
+    }
+    // Índice de intérpretes por título normalizado (todas las entradas de la
+    // API, no solo las que coincidieron por videoId).
+    let mut by_title: std::collections::HashMap<String, Vec<Vec<String>>> =
+        std::collections::HashMap::new();
+    for (_, (title, artists)) in exact {
+        if artists.is_empty() {
+            continue;
+        }
+        by_title
+            .entry(normalize_match_title(title))
+            .or_default()
+            .push(artists.clone());
+    }
+    for hit in hits.iter_mut() {
+        if merged.contains(&hit.id) {
+            continue;
+        }
+        if let Some(candidates) = by_title.get(&normalize_match_title(&hit.title)) {
+            if candidates.len() == 1 {
+                hit.artists = candidates[0].clone();
+            }
+        }
+    }
 }
 
 /// Lee la información de un enlace concreto de YouTube/YouTube Music
@@ -4365,5 +4428,109 @@ mod variant_title_tests {
         // El título final es el de YouTube Music, sin tocar: esta prueba solo
         // garantiza que la fuente de letra no sea la basura de formato.
         assert_eq!(title, "AOK (with 24kGoldn)");
+    }
+
+    #[test]
+    fn normalize_match_title_strips_parentheticals_and_case() {
+        assert_eq!(
+            normalize_match_title("Mind On You (con charlieonnafriday)"),
+            "mind on you"
+        );
+        assert_eq!(normalize_match_title("Mind On You"), "mind on you");
+        assert_eq!(normalize_match_title("Antes de Perderte"), "antes de perderte");
+        assert_eq!(normalize_match_title("Una Vaina Loca (Remix)"), "una vaina loca");
+        assert_eq!(normalize_match_title("Una Vaina Loca"), "una vaina loca");
+        assert_eq!(normalize_match_title("AOK (with 24kGoldn)"), "aok");
+        assert_eq!(normalize_match_title(""), "");
+    }
+
+    #[test]
+    fn apply_exact_info_prefers_videoid_then_unique_title() {
+        // La API conoce el videoId 1NMHaoQHAmI ("Antes de Perderte" → solo
+        // DUKI, sin los compositores que mezcla yt-dlp): gana por videoId.
+        let mut hits = vec![SearchHit {
+            id: "1NMHaoQHAmI".to_string(),
+            title: "Antes de Perderte".to_string(),
+            uploader: "Duki".to_string(),
+            duration_sec: 177,
+            thumbnail: String::new(),
+            cover_url: None,
+            artists: vec![
+                "DUKI".to_string(),
+                "Daniel Ismael Real".to_string(),
+                "Mauro Ezequiel Lombardo".to_string(),
+            ],
+        }];
+        let mut exact = std::collections::HashMap::new();
+        exact.insert(
+            "1NMHaoQHAmI".to_string(),
+            ("Antes de Perderte".to_string(), vec!["DUKI".to_string()]),
+        );
+        apply_exact_info(&mut hits, &exact);
+        assert_eq!(hits[0].artists, vec!["DUKI".to_string()]);
+        assert_eq!(hits[0].title, "Antes de Perderte");
+
+        // Sin videoId en la API, el respaldo por título rescata los
+        // intérpretes si el título normalizado coincide con UN resultado.
+        let mut hits = vec![SearchHit {
+            id: "otro-video".to_string(),
+            title: "Mind On You".to_string(),
+            uploader: "George Birge - Topic".to_string(),
+            duration_sec: 178,
+            thumbnail: String::new(),
+            cover_url: None,
+            artists: vec![
+                "George Birge".to_string(),
+                "Kidd G".to_string(),
+                "charlieonnafriday".to_string(),
+            ],
+        }];
+        let mut exact = std::collections::HashMap::new();
+        exact.insert(
+            "2i8f9X7lELs".to_string(),
+            (
+                "Mind On You (con charlieonnafriday)".to_string(),
+                vec!["George Birge".to_string(), "Kidd G".to_string()],
+            ),
+        );
+        apply_exact_info(&mut hits, &exact);
+        assert_eq!(
+            hits[0].artists,
+            vec!["George Birge".to_string(), "Kidd G".to_string()]
+        );
+        // El título NO se toca en el respaldo (lo exacto es del videoId).
+        assert_eq!(hits[0].title, "Mind On You");
+
+        // Título ambiguo (dos versiones distintas con el mismo título
+        // normalizado): NO se arriesga, se conservan los artistas de yt-dlp.
+        let mut hits = vec![SearchHit {
+            id: "ambigua".to_string(),
+            title: "Una Vaina Loca".to_string(),
+            uploader: String::new(),
+            duration_sec: 0,
+            thumbnail: String::new(),
+            cover_url: None,
+            artists: vec!["Fuego".to_string(), "Manuel Turizo".to_string(), "Duki".to_string()],
+        }];
+        let mut exact = std::collections::HashMap::new();
+        exact.insert(
+            "r1".to_string(),
+            (
+                "Una Vaina Loca".to_string(),
+                vec!["Fuego".to_string(), "Manuel Turizo".to_string(), "Duki".to_string()],
+            ),
+        );
+        exact.insert(
+            "r2".to_string(),
+            (
+                "Una Vaina Loca (Remix)".to_string(),
+                vec!["Fuego".to_string(), "Don Omar".to_string(), "Farruko & Natti Natasha".to_string()],
+            ),
+        );
+        apply_exact_info(&mut hits, &exact);
+        assert_eq!(
+            hits[0].artists,
+            vec!["Fuego".to_string(), "Manuel Turizo".to_string(), "Duki".to_string()]
+        );
     }
 }
