@@ -577,9 +577,11 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             if parts.len() < 6 || parts[0].is_empty() {
                 return None;
             }
-            // El título se enriquece con los colaboradores reales
-            // ("Mind On You" → "Mind On You (con charlieonnafriday)").
-            let title = enrich_title(parts[1].trim(), parts[5]);
+            // El título queda EXACTAMENTE como lo trae YouTube Music: si la
+            // canción tiene colaboradores en el nombre, ytmusic ya los
+            // incluye ("Mind On You (con Kidd G & charlieonnafriday)"); si
+            // no los incluye, no se le agregan aquí ("crazy" = "crazy").
+            let title = parts[1].trim();
             let uploader = parts[3].trim();
             let thumbnail = parts[4].trim();
             if title.is_empty() || title == "NA" {
@@ -587,7 +589,7 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             }
             Some(SearchHit {
                 id: parts[0].to_string(),
-                title,
+                title: title.to_string(),
                 uploader: if uploader.is_empty() || uploader == "NA" {
                     String::new()
                 } else {
@@ -1240,11 +1242,9 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
     } else {
         fallback
     };
-    // El título se enriquece con los colaboradores reales, igual que en la
-    // búsqueda ("Mind On You" → "Mind On You (con Kidd G & charlieonnafriday)"):
-    // el paréntesis identifica la versión (remix ≠ original) y es lo que
-    // LRCLIB y Musixmatch usan para distinguirlas al buscar la letra.
-    let title = enrich_title(&title, parts[6]);
+    // El título queda EXACTAMENTE como lo trae YouTube Music: si la canción
+    // tiene colaboradores en el nombre, ytmusic ya los incluye; si no los
+    // incluye, no se le agregan aquí ("crazy" = "crazy").
     let uploader = parts[4].trim();
     let thumbnail = parts[5].trim();
     if title.is_empty() || title == "NA" {
@@ -1252,15 +1252,15 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
     }
 
     // El título NUNCA se reescribe con el de LRCLIB: queda el que trae
-    // YouTube Music (ya enriquecido con los colaboradores), que es el nombre
-    // real de la canción. LRCLIB (y las demás fuentes) solo aportan la LETRA
+    // YouTube Music, que es el nombre real de la canción. LRCLIB (y las
+    // demás fuentes) solo aportan la LETRA
     // durante la descarga — si su título se adoptara, entradas basura como
     // "AOK (Official Video)" o "Una Vaina Loca (Paused)" bautizarían el
     // archivo.
 
     Ok(SearchHit {
         id: parts[0].to_string(),
-        title,
+        title: title.to_string(),
         uploader: if uploader.is_empty() || uploader == "NA" {
             String::new()
         } else {
@@ -1405,55 +1405,6 @@ fn cp1252_char(byte: u8) -> char {
         0xA0..=0xFF => char::from_u32(byte as u32).unwrap_or('�'),
         _ => byte as char,
     }
-}
-
-/// Añade los colaboradores al título cuando la canción los tiene pero el
-/// título de YouTube Music no los menciona. P. ej. título "Mind On You" +
-/// artistas ["George Birge", "Kidd G", "charlieonnafriday"] →
-/// "Mind On You (con charlieonnafriday)". Solo se añaden los colaboradores
-/// (todos menos el primero) y solo si no aparecen ya en el título.
-fn enrich_title(title: &str, artists_json: &str) -> String {
-    let lower_title = title.to_lowercase();
-    // Si el título ya identifica la versión (remix, feat., con, live…), no se
-    // añade "(con …)": "Calma (Remix)" no debe volverse "Calma (Remix)
-    // (con Farruko)". El colaborador igual llega a la búsqueda de letras por
-    // el artista completo.
-    let has_variant_marker = [
-        "remix", "feat", "with", "con ", "sped", "slowed", "edit", "live", "acoustic",
-    ]
-    .iter()
-    .any(|marker| lower_title.contains(marker));
-    if has_variant_marker {
-        return title.to_string();
-    }
-    let all: Vec<String> = serde_json::from_str::<serde_json::Value>(artists_json)
-        .ok()
-        .and_then(|value| {
-            value.as_array().map(|array| {
-                array
-                    .iter()
-                    .filter_map(|item| item.as_str().map(str::to_string))
-                    .filter(|name| !name.is_empty())
-                    .collect::<Vec<String>>()
-            })
-        })
-        .unwrap_or_default();
-    if all.len() < 2 {
-        return title.to_string();
-    }
-    let collaborators: Vec<&str> = all[1..]
-        .iter()
-        .filter(|name| !lower_title.contains(&name.to_lowercase()))
-        .map(|name| name.as_str())
-        // Máximo 2 colaboradores: los intérpretes van primero en los
-        // metadatos y detrás vienen compositores/productores, que no deben
-        // aparecer en el título.
-        .take(2)
-        .collect();
-    if collaborators.is_empty() {
-        return title.to_string();
-    }
-    format!("{} (con {})", title, collaborators.join(" & "))
 }
 
 /// Decodifica la salida de yt-dlp. Primero intenta UTF-8 (lo que emite con
@@ -3742,39 +3693,10 @@ mod read_real_txxx_tests {
 }
 
 /// Pruebas de la lógica de títulos con paréntesis: enriquecer el título con
-/// los colaboradores, los slugs de Musixmatch y la separación base/marcador
-/// ("Mind On You (con Kidd G & charlieonnafriday)").
+/// la separación base/marcador ("Mind On You (con Kidd G & charlieonnafriday)").
 #[cfg(test)]
 mod variant_title_tests {
     use super::*;
-
-    #[test]
-    fn enrich_adds_collaborators_when_title_is_plain() {
-        let artists = r#"["George Birge", "Kidd G", "charlieonnafriday"]"#;
-        assert_eq!(
-            enrich_title("Mind On You", artists),
-            "Mind On You (con Kidd G & charlieonnafriday)"
-        );
-    }
-
-    #[test]
-    fn enrich_skips_titles_that_already_have_a_variant_marker() {
-        // "Calma (Remix)" ya identifica la versión: no debe volverse
-        // "Calma (Remix) (con Farruko)".
-        let artists = r#"["Pedro Capó", "Farruko"]"#;
-        assert_eq!(enrich_title("Calma (Remix)", artists), "Calma (Remix)");
-        // Tampoco cuando el título ya trae "(con …)".
-        assert_eq!(
-            enrich_title("Mind On You (con Kidd G)", r#"["George Birge", "Kidd G"]"#),
-            "Mind On You (con Kidd G)"
-        );
-    }
-
-    #[test]
-    fn enrich_leaves_solo_titles_untouched() {
-        assert_eq!(enrich_title("Mind On You", r#"["George Birge"]"#), "Mind On You");
-        assert_eq!(enrich_title("", r#"[]"#), "");
-    }
 
     #[test]
     fn split_variant_separates_base_and_markers() {
