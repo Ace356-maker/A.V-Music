@@ -25,6 +25,9 @@ export interface SearchHit {
   thumbnail: string;
   /** Carátula explícita para el MP3 (p. ej. la del álbum de Spotify). */
   coverUrl?: string | null;
+  /** Intérpretes reales (p. ej. ["George Birge", "Kidd G", "charlieonnafriday"])
+   * para mostrarlos completos como YT Music. Vacío si el origen no los trae. */
+  artists?: string[];
 }
 
 /** Estado de una canción dentro del lote de descarga de playlist. */

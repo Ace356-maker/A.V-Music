@@ -12,6 +12,10 @@ type Phase = "idle" | "downloading" | "installing" | "error";
  * aparece unos segundos después de abrir, cuando el usuario ya la puede ver. */
 const CHECK_DELAY_MS = 10_000;
 
+/** Segundos de espera (con contador visible) antes de reiniciar tras
+ * instalar: la app no se cierra de golpe. */
+const RESTART_DELAY_SEC = 5;
+
 /**
  * Anillo de progreso circular: el icono de descarga en el centro y el anillo
  * que se llena con el porcentaje. Mientras no se sabe el tamaño total, el
@@ -90,6 +94,9 @@ export function UpdateChecker() {
   const [version, setVersion] = useState("");
   const [percent, setPercent] = useState<number | null>(null);
   const [error, setError] = useState("");
+  // Cuenta regresiva visible antes de reiniciar tras instalar (null = no
+  // hay cuenta en curso).
+  const [restartIn, setRestartIn] = useState<number | null>(null);
   // Evita doble arranque (StrictMode en desarrollo) de la descarga.
   const startedRef = useRef(false);
 
@@ -125,6 +132,7 @@ export function UpdateChecker() {
   async function install(update: Update): Promise<void> {
     setPhase("downloading");
     setPercent(null);
+    setRestartIn(null);
     let downloaded = 0;
     let contentLength = 0;
     await update.downloadAndInstall((event) => {
@@ -138,10 +146,30 @@ export function UpdateChecker() {
       }
     });
     setPhase("installing");
-    // En Windows la app se cierra sola al instalar; en macOS/Linux se
-    // reinicia aquí. Si algo falla, la próxima apertura lo reintenta.
-    await relaunch();
+    // La app NO se cierra de golpe: tras instalar espera con un contador
+    // visible antes de reiniciar. (En Windows el instalador puede cerrar el
+    // proceso antes de llegar a 0; en macOS/Linux el reinicio ocurre aquí.)
+    setRestartIn(RESTART_DELAY_SEC);
   }
+
+  // Cuenta regresiva antes del reinicio: baja 1 segundo a la vez y, al
+  // llegar a 0, reinicia. Si el reinicio falla, se muestra el error y la
+  // próxima apertura reintenta.
+  useEffect(() => {
+    if (phase !== "installing" || restartIn === null) return;
+    if (restartIn <= 0) {
+      void relaunch().catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setPhase("error");
+      });
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setRestartIn((current) => (current === null ? null : current - 1)),
+      1000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [phase, restartIn]);
 
   // Si la actualización falla, el modal se cierra solo a los pocos segundos:
   // la app vuelve a comprobar en la próxima apertura.
@@ -179,7 +207,9 @@ export function UpdateChecker() {
               {phase === "downloading"
                 ? "Descargando la nueva versión…"
                 : phase === "installing"
-                  ? "Instalando…"
+                  ? restartIn !== null && restartIn > 0
+                    ? `Instalada · se reiniciará en ${restartIn} ${restartIn === 1 ? "segundo" : "segundos"}`
+                    : "Reiniciando…"
                   : "No se pudo actualizar"}
             </p>
             {percent !== null && phase === "downloading" && (

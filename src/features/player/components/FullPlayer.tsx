@@ -32,35 +32,12 @@ import { SlideTitle } from "@/components/ui/SlideTitle";
 import { TrackCover } from "@/components/ui/TrackCover";
 import { VolumeIcon } from "@/components/ui/VolumeIcon";
 import { formatDuration } from "@/lib/format";
+import { displayTitle } from "@/lib/title";
 import { parseLyrics, type LrcLine } from "@/lib/lrc";
 import { useTrackCover } from "@/lib/useTrackCover";
 import { playerStore, usePlayer } from "@/features/player/playerStore";
 import { FADE_SEC, getActiveTrackId } from "@/features/player/audioEngine";
 import { useCrossfadeLayer } from "@/features/player/useCrossfadeLayer";
-
-/** Separa el artista principal del resto (p. ej. "Duki, Feid" → Duki + Feid). */
-function splitArtists(artist: string | null | undefined): { main: string; secondary: string[] } {
-  const parts = (artist ?? "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  return {
-    main: parts[0] ?? "",
-    secondary: parts.slice(1),
-  };
-}
-
-/** ¿El título ya menciona a TODOS estos artistas (p. ej. "feat. Chingy & JD
- * Walker")? Si el título los nombra, repetirlos en una fila aparte es
- * redundante y la fila se omite: la información ya está arriba. */
-function titleMentionsAll(title: string | null | undefined, names: string[]): boolean {
-  if (!title || names.length === 0) return false;
-  const haystack = title.toLowerCase();
-  return names.every((name) => {
-    const trimmed = name.trim().toLowerCase();
-    return trimmed.length > 0 && haystack.includes(trimmed);
-  });
-}
 
 /** Etiquetas legibles de cada fuente de letra del sidecar .avlr.json. */
 const SOURCE_LABELS: Record<string, string> = {
@@ -380,12 +357,11 @@ export function FullPlayer({
   // FADE_SEC (~1.2 s), no hay capa de salida: entra al instante y no
   // parpadea.
   const fadeInMs = Math.round(FADE_SEC * 1000);
-  const { main: mainArtist, secondary: secondaryArtists } = splitArtists(current?.artist);
-  // La fila de colaboradores solo se muestra cuando aporta algo: si el
-  // título ya los nombra ("Wrangler (Remix) [feat. Chingy & JD Walker]"),
-  // repetirlos debajo es un duplicado y se omite.
-  const showSecondaryArtists = !titleMentionsAll(current?.title, secondaryArtists);
-  const secondaryArtist = secondaryArtists.join(" · ");
+  // Todos los intérpretes en UNA fila, separados por coma — como YouTube
+  // Music. El MP3 ya guarda la nómina completa ("George Birge, Kidd G,
+  // charlieonnafriday"), así que se muestra tal cual, sin separar al
+  // principal del resto ni ocultar colaboradores por repetidos en el título.
+  const artistLine = current?.artist?.trim() || "";
 
   const prevLayer = useCrossfadeLayer(
     current?.id ?? null,
@@ -407,10 +383,8 @@ export function FullPlayer({
     () =>
       current
         ? {
-            title: current.title,
-            main: mainArtist,
-            secondary: secondaryArtist,
-            showSecondary: showSecondaryArtists,
+            title: displayTitle(current.title, current.artist),
+            artist: artistLine,
           }
         : null,
   );
@@ -961,13 +935,10 @@ export function FullPlayer({
                           align="center"
                           className="font-display text-3xl font-semibold tracking-tight text-ink lg:text-4xl"
                         />
-                        {prevTitleLayer.main && (
+                        {prevTitleLayer.artist && (
                           <p className="mt-1 max-w-3xl text-balance text-center text-base text-muted lg:text-lg">
-                            {prevTitleLayer.main}
+                            {prevTitleLayer.artist}
                           </p>
-                        )}
-                        {prevTitleLayer.showSecondary && prevTitleLayer.secondary && (
-                          <p className="truncate text-sm text-faint">{prevTitleLayer.secondary}</p>
                         )}
                       </div>
                     )}
@@ -983,17 +954,14 @@ export function FullPlayer({
                       {/* El nombre siempre ocupa UNA fila: si desborda el ancho
                           disponible, se desliza (marquee) como en la cola. */}
                       <SlideTitle
-                        text={current.title}
+                        text={displayTitle(current.title, current.artist)}
                         align="center"
                         className="font-display text-3xl font-semibold tracking-tight text-ink lg:text-4xl"
                       />
-                      {mainArtist && (
+                      {artistLine && (
                         <p className="mt-1 max-w-3xl text-balance text-center text-base text-muted lg:text-lg">
-                          {mainArtist}
+                          {artistLine}
                         </p>
-                      )}
-                      {secondaryArtist && showSecondaryArtists && (
-                        <p className="truncate text-sm text-faint">{secondaryArtist}</p>
                       )}
                     </div>
                   </div>
@@ -1148,7 +1116,7 @@ export function FullPlayer({
                           enfocar la fila no cambia nada del layout — solo
                           arranca el deslizamiento si desborda. */}
                       <SlideTitle
-                        text={track.title}
+                        text={displayTitle(track.title, track.artist)}
                         active={isCurrent}
                         className="text-sm font-medium text-ink"
                       />

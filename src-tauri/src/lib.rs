@@ -51,6 +51,10 @@ struct SearchHit {
     /// Spotify cuando se resuelve desde un enlace de Spotify). `None` en
     /// resultados normales: ahí la carátula sale de la miniatura del vídeo.
     cover_url: Option<String>,
+    /// Intérpretes reales de la canción (p. ej. ["George Birge", "Kidd G",
+    /// "charlieonnafriday"]) para mostrarlos completos como YT Music.
+    /// Vacío cuando el origen no los trae (búsqueda de vídeos de YouTube).
+    artists: Vec<String>,
 }
 
 /// Resultado de un enlace de playlist: título de la lista + canciones
@@ -544,6 +548,38 @@ async fn yt_search(app: tauri::AppHandle, query: String) -> Result<Vec<SearchHit
         .map_err(|err| format!("Búsqueda interrumpida: {err}"))?
 }
 
+/// Parsea el campo `%(artists)j` de yt-dlp a una lista limpia de
+/// intérpretes: deduplicada (YT Music repite a veces el mismo crédito),
+/// sin vacíos y con máximo 3 — los intérpretes van primero y detrás vienen
+/// compositores y productores. Si no se puede parsear, lista vacía.
+fn parse_artists_json(artists_json: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(artists_json) else {
+        return Vec::new();
+    };
+    let Some(array) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for item in array {
+        let Some(name) = item.as_str() else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty()
+            || out
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        out.push(name.to_string());
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
 /// YouTube Music guarda el título SIN colaboradores ("Mind On You" con
 /// artistas ["George Birge", "Kidd G", "charlieonnafriday"]) y su interfaz
 /// muestra "Mind On You (con charlieonnafriday)" generado desde los
@@ -645,6 +681,7 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
                     thumbnail.to_string()
                 },
                 cover_url: None,
+                artists: parse_artists_json(artists_json),
             })
         })
         .collect();
@@ -692,7 +729,7 @@ fn playlist_sync(app: &tauri::AppHandle, url: &str) -> Result<PlaylistResult, St
             "--skip-download",
             "--flat-playlist",
             "--print",
-            "%(playlist_title)s\t%(id)s\t%(title)s\t%(duration)s\t%(channel)s\t%(thumbnail)s",
+            "%(playlist_title)s\t%(id)s\t%(title)s\t%(duration)s\t%(channel)s\t%(thumbnail)s\t%(artists)j",
             url,
         ],
     )?;
@@ -706,7 +743,7 @@ fn playlist_sync(app: &tauri::AppHandle, url: &str) -> Result<PlaylistResult, St
     let mut hits: Vec<SearchHit> = Vec::new();
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 6 || parts[1].trim().is_empty() {
+        if parts.len() < 7 || parts[1].trim().is_empty() {
             continue;
         }
         if title.is_empty() && !parts[0].trim().is_empty() && parts[0].trim() != "NA" {
@@ -736,6 +773,9 @@ fn playlist_sync(app: &tauri::AppHandle, url: &str) -> Result<PlaylistResult, St
                 thumbnail.to_string()
             },
             cover_url: None,
+            // El modo plano suele traer los artistas de la playlist (YT
+            // Music los incluye); si vienen como "NA" o vacíos, lista vacía.
+            artists: parse_artists_json(parts[6].trim()),
         });
     }
     if hits.is_empty() {
@@ -915,6 +955,9 @@ fn search_videos_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchH
                     thumbnail.to_string()
                 },
                 cover_url: None,
+                // La búsqueda de vídeos de YouTube no trae artistas reales
+                // (solo el canal): la fila usa el canal, como siempre.
+                artists: Vec::new(),
             })
         })
         .collect();
@@ -1229,6 +1272,8 @@ fn resolve_spotify_sync(app: &tauri::AppHandle, spotify_id: &str) -> Result<Sear
         } else {
             Some(cover_url)
         },
+        // Intérpretes reales de Spotify (el embed solo lista performers).
+        artists: artists.iter().take(3).cloned().collect(),
     })
 }
 
@@ -1316,6 +1361,7 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
             thumbnail.to_string()
         },
         cover_url: None,
+        artists: parse_artists_json(parts[6].trim()),
     })
 }
 
@@ -3804,6 +3850,26 @@ mod variant_title_tests {
             ),
             "Mind On You"
         );
+    }
+
+    #[test]
+    fn parse_artists_cleans_and_caps_the_list() {
+        // El campo `%(artists)j` de YT Music: performers reales, a veces con
+        // créditos repetidos y, detrás, productores/compositores.
+        assert_eq!(
+            parse_artists_json(r#"["George Birge","Kidd G","charlieonnafriday"]"#),
+            vec!["George Birge".to_string(), "Kidd G".to_string(), "charlieonnafriday".to_string()]
+        );
+        // Deduplica (mismo crédito repetido) y corta en 3 (nada de
+        // compositores/productores).
+        assert_eq!(
+            parse_artists_json(r#"["Fuego","Manuel Turizo","Fuego","Duki","Otro Crédito"]"#),
+            vec!["Fuego".to_string(), "Manuel Turizo".to_string(), "Duki".to_string()]
+        );
+        // "NA" / vacío / basura → lista vacía (la UI cae al canal).
+        assert!(parse_artists_json("NA").is_empty());
+        assert!(parse_artists_json("").is_empty());
+        assert!(parse_artists_json("no-json").is_empty());
     }
 
     #[test]

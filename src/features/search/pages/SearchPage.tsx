@@ -17,7 +17,7 @@ const ROW_HEIGHT = 64;
  * enlace de Spotify implica varias búsquedas de yt-dlp y tarda segundos;
  * al volver a pegar el mismo enlace, la tarjeta aparece al instante.
  */
-const RESOLVE_CACHE_KEY = "avmusic.resolveCache.v1";
+const RESOLVE_CACHE_KEY = "avmusic.resolveCache.v2";
 const RESOLVE_CACHE_LIMIT = 40;
 
 function loadResolveCache(): Record<string, SearchHit> {
@@ -51,7 +51,7 @@ function cacheResolve(link: string, hit: SearchHit): void {
  * consulta (algo muy común al descargar de a una) ahora es instantáneo.
  * Con tiempo de vida para no quedarse con resultados eternamente viejos.
  */
-const SEARCH_CACHE_KEY = "avmusic.searchCache.v1";
+const SEARCH_CACHE_KEY = "avmusic.searchCache.v2";
 const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
 const SEARCH_CACHE_LIMIT = 30;
 
@@ -554,7 +554,12 @@ export default function SearchPage() {
                       )}
                     </p>
                     <p className="mt-0.5 truncate text-xs text-muted">
-                      {hit.uploader || "YouTube Music"}
+                      {/* Todos los intérpretes como YT Music ("George Birge,
+                          Kidd G, charlieonnafriday"); si el origen no los
+                          trae, el canal de siempre. */}
+                      {(hit.artists && hit.artists.length > 0
+                        ? hit.artists.join(", ")
+                        : hit.uploader) || "YouTube Music"}
                       {hit.durationSec > 0 ? ` · ${formatDuration(hit.durationSec)}` : ""}
                     </p>
                   </div>
