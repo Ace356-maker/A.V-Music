@@ -448,9 +448,10 @@ export const playerStore = {
   },
 
   setSelectedLyricsSource(source: string | null): void {
-    // Además de la preferencia global (fuente por defecto de canciones
-    // nuevas), se recuerda la fuente POR CANCIÓN: la canción que suena ahora
-    // guarda su propia elección y la recupera al volver a ella.
+    // La fuente elegida se recuerda POR CANCIÓN, no en general: cada canción
+    // guarda su propia elección y la recupera al volver a ella. Cambiar la
+    // fuente de una canción NO cambia la de las demás (ni la preferencia
+    // por defecto de las canciones nuevas).
     const lyricsByTrack = { ...state.lyricsByTrack };
     if (state.current) {
       if (source) {
@@ -467,8 +468,7 @@ export const playerStore = {
         delete lyricsByTrack[state.current.id];
       }
     }
-    setPartial({ selectedLyricsSource: source, lyricsByTrack });
-    persistSession();
+    setPartial({ lyricsByTrack });
     persistLyricsByTrack();
   },
 

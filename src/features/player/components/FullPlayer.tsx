@@ -266,12 +266,25 @@ export function FullPlayer({
     };
   }, [current?.id, current?.path]);
 
-  // Fuente activa: la que el usuario eligió PARA ESTA CANCIÓN (cada canción
-  // recuerda su última fuente), si no la preferencia global, si no la
-  // incrustada por defecto. No salta automáticamente aunque no haya letra:
-  // el mensaje lo indica y el usuario puede cambiar con las flechas.
+  // Fuente preferida: la elegida PARA ESTA CANCIÓN (cada canción recuerda
+  // la suya), si no la preferencia por defecto, si no la incrustada.
   const trackLyricsSource = current?.id ? lyricsByTrack[current.id] : undefined;
-  const activeSourceKey = trackLyricsSource ?? selectedLyricsSource ?? variants?.embedded ?? "lrclib";
+  const preferredSourceKey = trackLyricsSource ?? selectedLyricsSource ?? variants?.embedded ?? "lrclib";
+  // Fuentes que SÍ tienen letra en esta canción (orden canónico).
+  const availableSourceKeys = useMemo(
+    () =>
+      variants
+        ? ["lrclib", "ytmusic", "musixmatch"].filter((key) => variants.sources?.[key])
+        : [],
+    [variants],
+  );
+  // Fuente activa: la preferida si tiene letra; si no, se muestra
+  // automáticamente la primera fuente que sí la tenga (el selector la
+  // señala). Solo cuando ninguna fuente tiene letra se queda en la preferida
+  // (y se muestra el mensaje de "no hay letra").
+  const activeSourceKey = availableSourceKeys.includes(preferredSourceKey)
+    ? preferredSourceKey
+    : (availableSourceKeys[0] ?? preferredSourceKey);
 
   // La letra mostrada: la de la fuente elegida en el sidecar/AVLR.
   // IMPORTANTE: si el sidecar existe (variants != null) se usa SOLO la fuente

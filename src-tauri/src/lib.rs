@@ -581,14 +581,16 @@ fn parse_artists_json(artists_json: &str) -> Vec<String> {
 }
 
 /// Consulta la API cruda de YouTube Music (youtubei/v1/search, la misma que
-/// usa su interfaz) y devuelve el título EXACTO por id de vídeo. yt-dlp
-/// "limpia" los títulos de la pestaña de canciones: le quita los
-/// colaboradores del paréntesis ("Mind On You (con charlieonnafriday)" →
-/// "Mind On You") y los mueve a la lista de artistas; la API cruda los
-/// conserva tal cual, que es lo que muestra YT Music. Si la consulta falla,
-/// el mapa queda vacío y la búsqueda usa el título de yt-dlp (correcto
-/// cuando el nombre no trae colaboradores).
-fn ytmusic_exact_titles(query: &str) -> std::collections::HashMap<String, String> {
+/// usa su interfaz) y devuelve por id de vídeo el título EXACTO y los
+/// INTÉRPRETES (nunca compositores ni productores). yt-dlp "limpia" los
+/// títulos de la pestaña de canciones: le quita los colaboradores del
+/// paréntesis ("Mind On You (con charlieonnafriday)" → "Mind On You") y los
+/// mueve a la lista de artistas; y además mezcla los compositores con los
+/// intérpretes ("Antes de Perderte" → DUKI, Daniel Ismael Real, Mauro
+/// Ezequiel Lombardo). La API cruda conserva la verdad tal cual la muestra
+/// YT Music: título con su paréntesis e intérpretes puros. Si la consulta
+/// falla, el mapa queda vacío y la búsqueda usa los datos de yt-dlp.
+fn ytmusic_exact_titles(query: &str) -> std::collections::HashMap<String, (String, Vec<String>)> {
     let mut out = std::collections::HashMap::new();
     let body = format!(
         r#"{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240722.01.00","hl":"es"}}}},"query":{},"params":"EgWKAQIIAWoKEAoQCRADEAA%3D"}}"#,
@@ -622,12 +624,15 @@ fn ytmusic_exact_titles(query: &str) -> std::collections::HashMap<String, String
     };
     // Recorrido del JSON (el esquema cambia a menudo): cualquier
     // musicResponsiveListItemRenderer con watchEndpoint de vídeo cuenta.
-    fn walk(value: &serde_json::Value, out: &mut std::collections::HashMap<String, String>) {
+    fn walk(
+        value: &serde_json::Value,
+        out: &mut std::collections::HashMap<String, (String, Vec<String>)>,
+    ) {
         match value {
             serde_json::Value::Object(map) => {
                 if let Some(renderer) = map.get("musicResponsiveListItemRenderer") {
-                    if let Some((id, title)) = ytmusic_song_title(renderer) {
-                        out.insert(id, title);
+                    if let Some(info) = ytmusic_song_info(renderer) {
+                        out.insert(info.0, (info.1, info.2));
                     }
                 }
                 for child in map.values() {
@@ -646,10 +651,13 @@ fn ytmusic_exact_titles(query: &str) -> std::collections::HashMap<String, String
     out
 }
 
-/// Extrae (videoId, título exacto) de un `musicResponsiveListItemRenderer`
-/// de la API de YT Music. Solo las entradas de canción/vídeo (con
-/// watchEndpoint de vídeo) cuentan; los álbumes, artistas y listas no.
-fn ytmusic_song_title(renderer: &serde_json::Value) -> Option<(String, String)> {
+/// Extrae (videoId, título exacto, intérpretes) de un
+/// `musicResponsiveListItemRenderer` de la API de YT Music. Los intérpretes
+/// son los runs con enlace de artista de la segunda columna ("Canción •
+/// George Birge y Kidd G" → ["George Birge", "Kidd G"]); los compositores
+/// y productores nunca aparecen ahí. Solo las entradas de canción/vídeo
+/// (con watchEndpoint de vídeo) cuentan.
+fn ytmusic_song_info(renderer: &serde_json::Value) -> Option<(String, String, Vec<String>)> {
     let runs = renderer
         .pointer("/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text/runs")?
         .as_array()?;
@@ -667,7 +675,22 @@ fn ytmusic_song_title(renderer: &serde_json::Value) -> Option<(String, String)> 
     if title.is_empty() || title == "NA" {
         return None;
     }
-    Some((id.to_string(), title))
+    let artists = renderer
+        .pointer("/flexColumns/1/musicResponsiveListItemFlexColumnRenderer/text/runs")
+        .and_then(|runs| runs.as_array())
+        .map(|runs| {
+            runs.iter()
+                .filter(|run| {
+                    run.pointer("/navigationEndpoint/browseEndpoint").is_some()
+                })
+                .filter_map(|run| run.get("text").and_then(|text| text.as_str()))
+                .filter(|name| !name.is_empty())
+                .take(3)
+                .map(str::to_string)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    Some((id.to_string(), title, artists))
 }
 
 /// Lee el título EXACTO de la página de un vídeo de YouTube / YouTube
@@ -776,12 +799,16 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
         })
         .collect();
 
-    // Fusión: el título exacto de la API (como lo muestra YT Music) gana
-    // sobre el de yt-dlp para los vídeos que ambas consultas comparten.
-    if let Ok(exact_titles) = exact_rx.recv_timeout(std::time::Duration::from_secs(12)) {
+    // Fusión: el título exacto y los intérpretes de la API (como los muestra
+    // YT Music, sin compositores) ganan sobre los de yt-dlp para los vídeos
+    // que ambas consultas comparten.
+    if let Ok(exact_info) = exact_rx.recv_timeout(std::time::Duration::from_secs(12)) {
         for hit in &mut hits {
-            if let Some(exact) = exact_titles.get(&hit.id) {
-                hit.title = exact.clone();
+            if let Some((exact_title, exact_artists)) = exact_info.get(&hit.id) {
+                hit.title = exact_title.clone();
+                if !exact_artists.is_empty() {
+                    hit.artists = exact_artists.clone();
+                }
             }
         }
     }
@@ -2188,7 +2215,118 @@ fn pick_artist_tag(channel: &str, channel_singers: &[String], all: &[String]) ->
     }
 }
 
-fn fetch_meta(app: &tauri::AppHandle, url: &str) -> Option<SongMeta> {
+/// Lee el og:description de la página de YT Music (music.youtube.com) para
+/// un videoId: es la línea de INTÉRPRETES ("DUKI", "George Birge y Kidd G"),
+/// sin compositores ni productores. En www.youtube.com esa misma etiqueta es
+/// la descripción con los créditos completos; por eso se consulta el dominio
+/// music. Si no se puede leer, `None`.
+fn fetch_og_description(video_id: &str) -> Option<String> {
+    let url = format!("https://music.youtube.com/watch?v={video_id}");
+    let output = command("curl")
+        .args([
+            "-s",
+            "-L",
+            "--fail",
+            "--max-time",
+            "8",
+            "-A",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        ])
+        .arg(&url)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let html = String::from_utf8_lossy(&output.stdout);
+    let marker = r#"<meta property="og:description" content=""#;
+    let start = html.find(marker)? + marker.len();
+    let rest = &html[start..];
+    let end = rest.find('"')?;
+    let desc = rest[..end].trim().replace("&amp;", "&");
+    if desc.is_empty() || desc == "NA" {
+        None
+    } else {
+        Some(desc)
+    }
+}
+
+/// Separa los intérpretes de la línea del og:description ("George Birge y
+/// Kidd G", "Fuego, Manuel Turizo y Duki", "DUKI"). Se parte por " y " y
+/// ", " (nunca por "&": "Farruko & Natti Natasha" es un solo crédito).
+fn parse_performers(desc: &str) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for part in desc.split(" y ").flat_map(|part| part.split(", ")) {
+        let name = part.trim();
+        if name.is_empty() || out.iter().any(|existing| existing.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        out.push(name.to_string());
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Colaboradores que YT Music pone en el paréntesis del título ("(con
+/// charlieonnafriday)", "(feat. Fuego)", "(with X)"): son CANTANTES
+/// invitados y van en el tag junto a los principales. "Remix", "slowed",
+/// "live"… no son colaboradores.
+fn featured_from_title(title: &str) -> Vec<String> {
+    let Some(open) = title.find(['(', '[']) else {
+        return Vec::new();
+    };
+    let Some(close_rel) = title[open..].find([')', ']']) else {
+        return Vec::new();
+    };
+    let inside = title[open + 1..open + close_rel].trim();
+    let lower = inside.to_lowercase();
+    let rest = if lower.starts_with("con ") {
+        inside.get(4..)
+    } else if lower.starts_with("feat. ") {
+        inside.get(6..)
+    } else if lower.starts_with("feat ") {
+        inside.get(5..)
+    } else if lower.starts_with("with ") {
+        inside.get(5..)
+    } else if lower.starts_with("ft. ") {
+        inside.get(4..)
+    } else {
+        None
+    };
+    let Some(rest) = rest else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for name in rest.split(" & ").flat_map(|part| part.split(',')).map(str::trim) {
+        if name.is_empty() || out.iter().any(|existing| existing.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        out.push(name.to_string());
+    }
+    out
+}
+
+fn fetch_meta(app: &tauri::AppHandle, url: &str, title: &str) -> Option<SongMeta> {
+    // Los INTÉRPRETES puros (nunca compositores ni productores) salen del
+    // og:description de music.youtube.com ("DUKI", "George Birge y Kidd G"):
+    // yt-dlp mezcla todo en %(artists)j. Se consulta en paralelo con yt-dlp.
+    let (og_tx, og_rx) = std::sync::mpsc::channel();
+    let video_id = extract_video_id(url);
+    std::thread::spawn(move || {
+        let performers = video_id
+            .as_deref()
+            .and_then(fetch_og_description)
+            .and_then(|desc| parse_performers(&desc))
+            .unwrap_or_default();
+        let _ = og_tx.send(performers);
+    });
+
     let output = ytdlp(
         app,
         &[
@@ -2238,24 +2376,57 @@ fn fetch_meta(app: &tauri::AppHandle, url: &str) -> Option<SongMeta> {
         .filter(|name| !name.is_empty())
         .map(str::to_string)
         .collect();
-    let artist_tag = pick_artist_tag(channel, &channel_singers, &all)?;
+
+    // Intérpretes de la página (principales) + colaboradores del título
+    // (los que YT Music pone en el paréntesis "(con X)"): el tag lleva a
+    // TODOS los cantantes y NINGÚN compositor. Si el og no llegó, se cae al
+    // cálculo por canal/metadato.
+    let og_performers = og_rx
+        .recv_timeout(std::time::Duration::from_secs(12))
+        .unwrap_or_default();
+    let artist_tag = if og_performers.is_empty() {
+        pick_artist_tag(channel, &channel_singers, &all)?
+    } else {
+        let mut names: Vec<String> = Vec::new();
+        for name in og_performers.iter().chain(featured_from_title(title).iter()) {
+            let name = name.trim();
+            if name.is_empty()
+                || names
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            names.push(name.to_string());
+            if names.len() >= 3 {
+                break;
+            }
+        }
+        if names.is_empty() {
+            pick_artist_tag(channel, &channel_singers, &all)?
+        } else {
+            names.join(", ")
+        }
+    };
 
     let album = if album_raw.is_empty() || album_raw == "NA" {
         None
     } else {
         Some(album_raw.to_string())
     };
-    // Para la búsqueda de letras: TODOS los intérpretes conocidos (máx. 3),
-    // con el principal primero. En un canal Topic con varios nombres, la
-    // nómina del canal es la oficial; en el resto se usan los del metadato
-    // ("George Birge, Kidd G, charlieonnafriday"): así LRCLIB y Musixmatch
-    // reconocen la versión con feat. aunque el título no la mencione.
-    let artists_for_lyrics = if is_topic && channel_singers.len() >= 2 {
-        channel_singers.join(", ")
-    } else if all.is_empty() {
-        artist_tag.clone()
+    // Para la búsqueda de letras: TODOS los intérpretes conocidos, igual que
+    // el tag (o el respaldo de siempre si no llegó el og), para que LRCLIB y
+    // Musixmatch reconozcan la versión con colaboradores.
+    let artists_for_lyrics = if og_performers.is_empty() {
+        if is_topic && channel_singers.len() >= 2 {
+            channel_singers.join(", ")
+        } else if all.is_empty() {
+            artist_tag.clone()
+        } else {
+            all.iter().take(3).cloned().collect::<Vec<String>>().join(", ")
+        }
     } else {
-        all.iter().take(3).cloned().collect::<Vec<String>>().join(", ")
+        artist_tag.clone()
     };
     Some(SongMeta {
         artist_tag,
@@ -3516,7 +3687,7 @@ fn download_sync(
 
     // 3) Artistas reales (p. ej. "Duki, Feid"), álbum y letra con el principal.
     let artist_clean = artist.strip_suffix(" - Topic").unwrap_or(artist).trim();
-    let meta = fetch_meta(app, url);
+    let meta = fetch_meta(app, url, title);
     let performing = meta.as_ref().map(|meta| meta.artist_tag.as_str());
     let album_opt = meta.as_ref().and_then(|meta| meta.album.as_deref());
     let artist_tag = performing.unwrap_or(artist_clean);
@@ -3906,29 +4077,93 @@ mod variant_title_tests {
     }
 
     #[test]
-    fn ytmusic_song_title_extracts_the_exact_displayed_title() {
+    fn ytmusic_song_info_extracts_title_and_performers() {
         // Un renderer real de la API de YT Music: el título ya viene con los
-        // colaboradores en el paréntesis, tal cual lo muestra la interfaz.
+        // colaboradores en el paréntesis y la segunda columna lista SOLO los
+        // intérpretes ("Canción • George Birge y Kidd G"), sin compositores.
         let renderer = serde_json::json!({
-            "flexColumns": [{
-                "musicResponsiveListItemFlexColumnRenderer": {
-                    "text": {
-                        "runs": [{
-                            "text": "Mind On You (con charlieonnafriday)",
-                            "navigationEndpoint": {
-                                "watchEndpoint": {"videoId": "2i8f9X7lELs"}
-                            }
-                        }]
+            "flexColumns": [
+                {
+                    "musicResponsiveListItemFlexColumnRenderer": {
+                        "text": {
+                            "runs": [{
+                                "text": "Mind On You (con charlieonnafriday)",
+                                "navigationEndpoint": {
+                                    "watchEndpoint": {"videoId": "2i8f9X7lELs"}
+                                }
+                            }]
+                        }
+                    }
+                },
+                {
+                    "musicResponsiveListItemFlexColumnRenderer": {
+                        "text": {
+                            "runs": [
+                                {"text": "Canción"},
+                                {"text": " • "},
+                                {"text": "George Birge", "navigationEndpoint": {"browseEndpoint": {}}},
+                                {"text": " y "},
+                                {"text": "Kidd G", "navigationEndpoint": {"browseEndpoint": {}}}
+                            ]
+                        }
                     }
                 }
-            }]
+            ]
         });
         assert_eq!(
-            ytmusic_song_title(&renderer),
-            Some(("2i8f9X7lELs".to_string(), "Mind On You (con charlieonnafriday)".to_string()))
+            ytmusic_song_info(&renderer),
+            Some((
+                "2i8f9X7lELs".to_string(),
+                "Mind On You (con charlieonnafriday)".to_string(),
+                vec!["George Birge".to_string(), "Kidd G".to_string()]
+            ))
         );
         // Entradas sin watchEndpoint de vídeo (álbumes, artistas) no cuentan.
-        assert!(ytmusic_song_title(&serde_json::json!({})).is_none());
+        assert!(ytmusic_song_info(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn performers_only_never_composers() {
+        // La línea de intérpretes del og:description de music.youtube.com.
+        assert_eq!(parse_performers("DUKI"), Some(vec!["DUKI".to_string()]));
+        assert_eq!(
+            parse_performers("George Birge y Kidd G"),
+            Some(vec!["George Birge".to_string(), "Kidd G".to_string()])
+        );
+        assert_eq!(
+            parse_performers("Fuego, Manuel Turizo y Duki"),
+            Some(vec!["Fuego".to_string(), "Manuel Turizo".to_string(), "Duki".to_string()])
+        );
+        // "&" no se parte: es parte de un crédito ("Farruko & Natti Natasha").
+        assert_eq!(
+            parse_performers("Fuego, Don Omar, Farruko & Natti Natasha"),
+            Some(vec![
+                "Fuego".to_string(),
+                "Don Omar".to_string(),
+                "Farruko & Natti Natasha".to_string()
+            ])
+        );
+        assert_eq!(parse_performers(""), None);
+    }
+
+    #[test]
+    fn featured_comes_only_from_collaboration_markers() {
+        assert_eq!(
+            featured_from_title("Mind On You (con charlieonnafriday)"),
+            vec!["charlieonnafriday".to_string()]
+        );
+        assert_eq!(
+            featured_from_title("Una Vaina Loca (feat. Fuego)"),
+            vec!["Fuego".to_string()]
+        );
+        assert_eq!(
+            featured_from_title("Una Vaina Loca (feat. Chingy & JD Walker)"),
+            vec!["Chingy".to_string(), "JD Walker".to_string()]
+        );
+        // Remix / slowed / live NO son colaboradores.
+        assert!(featured_from_title("Una Vaina Loca (Remix)").is_empty());
+        assert!(featured_from_title("Antes de Perderte").is_empty());
+        assert!(featured_from_title("crazy").is_empty());
     }
 
     #[test]
