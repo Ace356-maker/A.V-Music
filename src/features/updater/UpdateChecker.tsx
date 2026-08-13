@@ -145,6 +145,7 @@ export function UpdateChecker() {
         }
       }
     });
+    setPercent(100);
     setPhase("installing");
     // La app muestra la tarjeta con la cuenta regresiva durante 5 segundos completos.
     // Solo cuando el contador llega a 0 se ejecuta la instalación y el reinicio.
