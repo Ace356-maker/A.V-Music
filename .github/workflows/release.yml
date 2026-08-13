@@ -40,6 +40,15 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # Fallo rápido y claro si falta la clave de firma (Settings → Secrets
+      # → Actions → TAURI_SIGNING_PRIVATE_KEY), en vez de compilar 15 min
+      # para recién fallar al firmar.
+      - name: Verificar la clave de firma
+        if: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY == '' }}
+        run: |
+          echo "::error::Falta el secreto TAURI_SIGNING_PRIVATE_KEY. Agrégalo en Settings → Secrets and variables → Actions del repo (contenido de avmusic.key)."
+          exit 1
+
       - name: Compilar y publicar el release
         uses: tauri-apps/tauri-action@v0
         env:
