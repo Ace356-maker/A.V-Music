@@ -203,13 +203,13 @@ export function UpdateChecker() {
         <div className="mt-6 flex flex-col items-center gap-3">
           <ProgressRing percent={percent} downloading={phase === "downloading"} />
           <div className="text-center">
-            <p className="text-sm text-ink">
+            <p className="text-sm font-medium text-ink">
               {phase === "downloading"
                 ? "Descargando la nueva versión…"
                 : phase === "installing"
                   ? restartIn !== null && restartIn > 0
-                    ? `Instalada · se reiniciará en ${restartIn} ${restartIn === 1 ? "segundo" : "segundos"}`
-                    : "Reiniciando…"
+                    ? `¡Actualización lista! Reiniciando en ${restartIn} ${restartIn === 1 ? "segundo" : "segundos"}…`
+                    : "Reiniciando aplicación…"
                   : "No se pudo actualizar"}
             </p>
             {percent !== null && phase === "downloading" && (
