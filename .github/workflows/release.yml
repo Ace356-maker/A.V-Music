@@ -49,6 +49,7 @@ jobs:
       # condiciones `if:`, por eso la clave se pasa por env y se comprueba
       # en el shell.
       - name: Verificar la clave de firma
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
@@ -56,6 +57,7 @@ jobs:
             echo "::error::Falta el secreto TAURI_SIGNING_PRIVATE_KEY (Settings > Secrets and variables > Actions del repo, con el contenido de avmusic.key)."
             exit 1
           fi
+          echo "Clave de firma encontrada"
 
       - name: Compilar y publicar el release
         uses: tauri-apps/tauri-action@v0
