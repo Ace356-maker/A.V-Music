@@ -1,0 +1,26 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen/schemas
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Llaves de firma de actualizaciones (NUNCA deben subirse al repo)
+.tauri/
+*.key
+*.key.pub
+
+# Archivos temporales de depuración
+q*.tsv
+yt_2d.tsv
+e.html
+spot_embedded.html
+
+# Herramientas locales
+.freebuff/
+.hallmark/

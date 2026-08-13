@@ -1,0 +1,59 @@
+# Publica una versión nueva de A.V Music.
+#
+# Cómo lanzar una actualización:
+#   1. Sube la versión en los tres sitios: `pnpm bump 0.2.0`
+#   2. Commit + tag:  `git add -A && git commit -m "v0.2.0" && git tag v0.2.0`
+#   3. Sube el tag:   `git push origin v0.2.0`
+#
+# El workflow compila el instalador (NSIS), lo firma con tu clave privada y
+# sube a GitHub Releases junto con `latest.json` — el archivo que la app
+# consulta al arrancar para saber que existe la versión nueva. Los usuarios
+# con la app instalada reciben el aviso y se actualizan solos.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Compilar y publicar el release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # La clave privada de firma (generada con `pnpm tauri signer
+          # generate`). Configúrala en Settings → Secrets and variables →
+          # Actions del repo. NUNCA la subas al código.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "A.V Music v__VERSION__"
+          releaseBody: "Nueva versión de A.V Music."
+          releaseDraft: false
+          prerelease: false
+          # Genera y adjunta `latest.json` (el manifiesto que consulta la app).
+          includeUpdaterJson: true

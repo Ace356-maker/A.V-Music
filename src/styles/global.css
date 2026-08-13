@@ -1,0 +1,273 @@
+@import "tailwindcss";
+
+/*
+  A.V Music · reproductor local · negro puro
+  Toda la interfaz es de un solo color: negro. Sin paneles grises, sin
+  separadores, sin tonos intermedios — el blanco del texto, los controles y
+  las carátulas son lo único que destaca sobre el lienzo.
+  Tipografía: Space Grotesk (display, geométrica y profesional) · Instrument
+  Sans (cuerpo) · JetBrains Mono (datos).
+*/
+
+@theme {
+  --color-canvas: oklch(0% 0 0); /* fondo: negro puro */
+  --color-panel: oklch(0% 0 0); /* paneles: mismo negro, sin tonos */
+  --color-panel-2: oklch(0% 0 0); /* hover: mismo negro */
+  --color-rule: oklch(30% 0 0); /* únicas líneas visibles: las laterales */
+  --color-rule-strong: oklch(42% 0 0); /* pista vacía de sliders: línea visible */
+  --color-faint: oklch(54% 0 0); /* meta */
+  --color-muted: oklch(74% 0 0); /* texto secundario */
+  --color-ink: oklch(100% 0 0); /* texto principal: blanco puro */
+  --color-accent: oklch(100% 0 0); /* acento: blanco puro */
+  --color-accent-strong: oklch(88% 0 0);
+  --color-accent-soft: oklch(0% 0 0); /* fila activa: mismo negro */
+  --color-focus: oklch(100% 0 0);
+
+  --font-sans:
+    "Instrument Sans Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-display:
+    "Space Grotesk Variable", "Instrument Sans Variable", system-ui, -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+  --font-mono:
+    "JetBrains Mono Variable", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+  }
+
+  ::selection {
+    background-color: var(--color-accent);
+    color: var(--color-canvas);
+  }
+
+  /* Las imágenes no se arrastran: el drag nativo de imagen oscurecía las
+     carátulas al mover el ratón y bloqueaba la selección de texto. */
+  img,
+  svg {
+    -webkit-user-drag: none;
+  }
+
+  :is(table, .tabular-nums) {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Scrollbar discreta, acorde al tema oscuro */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-rule-strong) transparent;
+  }
+}
+
+/*
+  Sliders (seek y volumen). La pista y el relleno los dibuja el componente
+  como capas (el input solo aporta el pulgar); aquí se estiliza la forma del
+  input y el pulgar. Webkit y Firefox comparten el alto del elemento.
+
+  Pista fina (4 px) y pulgar pequeño y limpio, centrado en la pista: blanco
+  con un borde oscuro fino para definirse sobre el relleno blanco, sin halos
+  ni anillos — la barra se ve como una línea, no como un bloque.
+*/
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  cursor: pointer;
+  /* Fallback si las capas del componente no llegan */
+  background: var(--color-rule-strong);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  border: 1px solid rgb(0 0 0 / 0.45);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+  transition: transform 0.15s ease-out;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  border: 1px solid rgb(0 0 0 / 0.45);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+}
+
+/* Manito en todo lo interactivo: botones habilitados (los sliders y enlaces
+   ya la tienen por su cuenta). */
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* Barra indeterminada de descarga: el relleno cruza la pista de un lado al
+   otro mientras no hay porcentaje real (arranque o preparación de ffmpeg). */
+@keyframes barra-indeterminada {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+.bar-indeterminate {
+  border-radius: 9999px;
+  background-color: var(--color-accent);
+  animation: barra-indeterminada 1.1s ease-in-out infinite;
+}
+
+/* Contenedor con scroll automático (letras) sin barra visible. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+  Ola de la letra, letra por letra: al activarse una frase, sus caracteres
+  suben y BAJAN SOLOS en ~0.55 s (la ola se completa y vuelve a reposo
+  mientras la frase aún suena) — nada de quedarse arriba ni de bajar de golpe
+  al quitar el foco. El retardo escalonado por carácter hace que la ola viaje
+  a lo largo de la frase. Va ACOMPASADA con el auto-scroll: ambos arrancan en
+  el mismo frame del cambio de frase y completan su movimiento principal en
+  ~0.2-0.55 s, así la frase "brota" mientras la vista la centra. Solo usa
+  transform (nada de layout); TODAS las frases se renderizan igual (mismo
+  árbol de cajas), así enfocar una nunca cambia el ancho ni las filas. El
+  elemento de la frase NO se re-monta (key estable).
+*/
+@keyframes av-ritmo {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
+/* Palabra indivisible: la frase solo rompe línea en los espacios reales. */
+.lyric-word {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.lyric-char {
+  display: inline-block;
+  /* Red de seguridad contra el snap: si la frase se desactiva con la ola a
+     medias (frases muy seguidas), los caracteres bajan suaves en vez de
+     saltar a su lugar. Mientras la animación corre, ella tiene prioridad;
+     esta transición solo actúa cuando se quita la clase a mitad de la ola. */
+  transition: transform 0.25s ease-out;
+}
+
+/* Solo la frase activa anima. will-change SOLO aquí (~unos 40 caracteres), no
+   en los cientos de caracteres de todas las frases: menos capas de
+   composición mientras el contenedor se desplaza (menos micro-jank). */
+.lyric-char-active {
+  animation: av-ritmo 0.55s ease-in-out 1;
+  will-change: transform;
+}
+
+/* Glow de la frase activa en el <p> COMPLETO (una sola caja, no por
+   carácter): mismo brillo, pero el hilo principal repinta un solo elemento
+   en vez de decenas durante la ola. Entra/sale suave con el transition-all
+   del <p>. */
+.lyric-line-active {
+  text-shadow:
+    0 0 10px rgb(255 255 255 / 0.28),
+    0 0 3px rgb(255 255 255 / 0.14);
+}
+
+/*
+  Animación de cambio de pista, compartida por la carátula y el título/artista
+  para que se sientan simétricos: lo que entra se desvanece y se acerca con un
+  zoom sutil, y lo que sale (solo la carátula) se desvanece. La duración es la
+  del crossfade de audio (FADE_SEC) para que imagen y sonido vayan acompasados.
+*/
+@keyframes av-cambio-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes av-cambio-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Cambio de LETRA al cambiar de pista: un cruce limpio y SIN movimiento —
+   solo fundido de opacidad (ni zoom ni desliz). La letra vieja se desvanece
+   en su lugar y la nueva aparece en el mismo sitio: nada se mueve, solo se
+   funden. */
+@keyframes av-letra-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes av-letra-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Título con marquee continuo (sale y vuelve a entrar) para los nombres que
+   desbordan su fila. El track lleva dos copias del texto separadas por un
+   gap de 16 px; el keyframe va a -50 % menos la mitad del gap (8 px), así la
+   segunda copia aterriza exactamente donde empezó la primera — sin corte. */
+@keyframes av-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-50% - 8px));
+  }
+}
+
+.marquee-track {
+  display: inline-flex;
+  gap: 1rem; /* 16 px entre las dos pasadas del nombre */
+  white-space: nowrap;
+}
+
