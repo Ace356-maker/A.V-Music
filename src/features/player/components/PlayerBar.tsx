@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   IconArrowsShuffle,
   IconMicrophone2,
@@ -55,6 +56,22 @@ export function PlayerBar() {
   const [duration, setDuration] = useState(0);
   const [scrub, setScrub] = useState<number | null>(null);
   const [lyricsOn, setLyricsOn] = useState(loadLyricsOn);
+  // Versión de la app (p. ej. "0.2.0") para la esquina inferior derecha.
+  const [appVersion, setAppVersion] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void getVersion()
+      .then((version) => {
+        if (!cancelled) setAppVersion(version);
+      })
+      .catch(() => {
+        // En desarrollo (navegador) puede no estar disponible: sin etiqueta.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // El modo maximizado se recuerda entre sesiones: si estaba abierto al
   // cerrar y hay una pista restaurada, vuelve a abrir igual. Sin pista
   // restaurada no se abre solo.
@@ -140,7 +157,7 @@ export function PlayerBar() {
   return (
     <footer
       onClick={handleBarClick}
-      className="flex h-21 shrink-0 items-center gap-5 px-5"
+      className="relative flex h-21 shrink-0 items-center gap-5 px-5"
     >
       {/* Pista actual (clic aquí o en la zona abre el reproductor) */}
       <div className="flex min-w-0 w-72 cursor-pointer items-center gap-3">
@@ -298,6 +315,15 @@ export function PlayerBar() {
         lyricsOn={lyricsOn}
         onToggleLyrics={toggleLyrics}
       />
+
+      {/* Versión de la app: esquina inferior derecha, debajo del volumen.
+          Superpuesta y sin interacción (pointer-events-none) para no
+          interferir con nada de la barra. */}
+      {appVersion && (
+        <span className="pointer-events-none absolute bottom-1 right-3 font-mono text-[10px] tabular-nums text-faint/70">
+          v{appVersion}
+        </span>
+      )}
     </footer>
   );
 }
