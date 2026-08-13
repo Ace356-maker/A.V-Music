@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "tauri": "tauri",
     "bump": "node scripts/bump-version.mjs",
+    "build:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
     "postinstall": "tauri icon -o src-tauri/icons src-tauri/icons/app-icon.svg"
   },
   "dependencies": {
