@@ -1,6 +1,16 @@
-# 🎵 A.V Music — Reproductor de Música Local & Descargador (v0.5.12)
+# 🎵 A.V Music — Reproductor de Música Local & Descargador (v0.5.13)
 
 > **Tu música, en tu disco.** **A.V Music** es un reproductor de escritorio de alto rendimiento: escanea tu biblioteca local en milisegundos con Rust, reproduce audio local con fluidez y te permite **buscar, resolver enlaces (YouTube Music y Spotify) y descargar canciones en MP3 de alta calidad con metadatos limpios y letras sincronizadas**, todo sin cuentas ni servicios en la nube.
+
+---
+
+## ⬇️ Descarga e Instalación
+
+Para instalar **A.V Music** en tu equipo sin necesidad de compilar código:
+
+1. Ve a la sección de **[Releases del repositorio](https://github.com/Ace356-maker/A.V-Music/releases/latest)**.
+2. Descarga el ejecutable para tu sistema (en Windows: `A.V.Music_x64-setup.exe` o `.msi`).
+3. Ejecuta el instalador. La aplicación se instalará y mantendrá actualizada de forma 100% automática en futuras versiones.
 
 ---
 
@@ -10,6 +20,7 @@
 - **🔍 Búsqueda & Enlaces Inteligentes:** Pega cualquier enlace de **YouTube Music** o **Spotify**. El sistema extrae el título exacto y resuelve automáticamente los intérpretes reales (filtrando compositores, arreglistas o productores).
 - **🎶 Descargas de Alta Calidad (MP3 V0):** Incorporación de portada oficial, etiquetas ID3v2 completas y letras sincronizadas (LRC/USLT) embebidas en el propio archivo.
 - **🎤 Letras Sincronizadas:** Visualización fluida de letras tipo karaoke en tiempo real.
+- **🔄 Auto-Actualización Fluida:** Al arrancar, comprueba y descarga nuevas versiones solo en segundo plano, mostrando un conteo claro de 5 segundos antes de aplicar los cambios.
 - **🛡️ 100% Privado y Offline:** Sin cuentas, sin rastreo y sin almacenamiento en la nube. Todos tus archivos permanecen en tu disco local.
 - **🚀 Cero Configuración:** `yt-dlp` y `ffmpeg` se descargan y gestionan de forma transparente en segundo plano cuando se necesitan.
 
@@ -26,14 +37,14 @@
 
 ---
 
-## ⚙️ Requisitos Previos
+## ⚙️ Requisitos Previos (Para Desarrolladores)
 
 - **Node.js ≥ 20** y **pnpm**.
 - **Rust Toolchain** (`rustup`, canal stable) y en Windows las **MSVC Build Tools** (desarrollo de escritorio con C++) + WebView2.
 
 ---
 
-## 📦 Puesta en Marcha
+## 📦 Puesta en Marcha (Desarrollo Local)
 
 ```bash
 # 1. Instalar dependencias
@@ -43,7 +54,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Para generar la compilación de producción:
+Para compilar el instalador de producción localmente:
 ```bash
 pnpm tauri build
 ```
@@ -61,7 +72,8 @@ src/
 ├── features/
 │   ├── library/            # Gestión de biblioteca local e importación de carpetas
 │   ├── player/             # Motor de audio (`audioEngine.ts`) y estado del reproductor
-│   └── search/             # Búsqueda, descarga y resolución de enlaces
+│   ├── search/             # Búsqueda, descarga y resolución de enlaces
+│   └── updater/            # Módulo de auto-actualización silenciosa y segura
 ├── lib/                    # Formateadores y utilidades
 ├── styles/                 # Tokens del sistema de diseño (OKLCH, Tailwind v4)
 └── types/                  # Definición de tipos de datos (Track, SearchHit, etc.)

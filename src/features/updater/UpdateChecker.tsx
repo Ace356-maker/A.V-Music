@@ -190,12 +190,12 @@ export function UpdateChecker() {
 
   return (
     <div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-xs"
       role="dialog"
       aria-modal="true"
       aria-label="Actualización disponible"
     >
-      <div className="w-full max-w-sm rounded-lg border border-rule bg-panel-2 p-6 shadow-2xl shadow-black/60">
+      <div className="w-full max-w-sm rounded-xl border border-rule bg-panel-2 p-6 shadow-2xl shadow-black/60">
         {/* Cabecera: título + versión nueva */}
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-display text-lg font-semibold tracking-tight text-ink">
@@ -206,31 +206,28 @@ export function UpdateChecker() {
           </span>
         </div>
 
-        {/* Progreso: anillo + estado */}
-        <div className="mt-6 flex flex-col items-center gap-3">
+        {/* Progreso: anillo + estado con altura fija estable */}
+        <div className="mt-6 flex flex-col items-center gap-4">
           <ProgressRing percent={percent} downloading={phase === "downloading"} />
-          <div className="text-center">
+          <div className="flex min-h-[48px] flex-col items-center justify-center text-center">
             <p className="text-sm font-medium text-ink">
               {phase === "downloading"
                 ? "Descargando la nueva versión…"
                 : phase === "installing"
-                  ? restartIn !== null && restartIn > 0
-                    ? `¡Actualización lista! Reiniciando en ${restartIn} ${restartIn === 1 ? "segundo" : "segundos"}…`
-                    : "Reiniciando aplicación…"
+                  ? "¡Actualización instalada!"
                   : "No se pudo actualizar"}
             </p>
-            {percent !== null && phase === "downloading" && (
-              <p className="mt-0.5 font-mono text-xs tabular-nums text-faint">{percent}%</p>
-            )}
+            <p className="mt-1 font-mono text-xs tabular-nums text-faint">
+              {phase === "downloading"
+                ? `${percent ?? 0}%`
+                : phase === "installing"
+                  ? restartIn !== null && restartIn > 0
+                    ? `Reiniciando en ${restartIn} ${restartIn === 1 ? "segundo" : "segundos"}…`
+                    : "Reiniciando…"
+                  : error || "Revisa tu conexión."}
+            </p>
           </div>
         </div>
-
-        {/* Error: mensaje (el modal se cierra solo en unos segundos) */}
-        {phase === "error" && (
-          <p className="mt-3 text-center text-xs leading-relaxed text-muted">
-            {error || "Revisa tu conexión e inténtalo de nuevo."}
-          </p>
-        )}
       </div>
     </div>
   );

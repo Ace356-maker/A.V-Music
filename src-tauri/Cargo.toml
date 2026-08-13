@@ -1,6 +1,6 @@
 [package]
 name = "av-music"
-version = "0.5.12"
+version = "0.5.13"
 description = "Reproductor de música local con visualizador reactivo"
 authors = ["A.V Music"]
 edition = "2021"
