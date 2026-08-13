@@ -1,4 +1,4 @@
-# 🎵 A.V Music — Reproductor de Música Local & Descargador (v0.5.10)
+# 🎵 A.V Music — Reproductor de Música Local & Descargador (v0.5.11)
 
 > **Tu música, en tu disco.** **A.V Music** es un reproductor de escritorio de alto rendimiento: escanea tu biblioteca local en milisegundos con Rust, reproduce audio local con fluidez y te permite **buscar, resolver enlaces (YouTube Music y Spotify) y descargar canciones en MP3 de alta calidad con metadatos limpios y letras sincronizadas**, todo sin cuentas ni servicios en la nube.
 

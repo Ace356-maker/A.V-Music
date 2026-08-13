@@ -94,11 +94,10 @@ export function UpdateChecker() {
   const [version, setVersion] = useState("");
   const [percent, setPercent] = useState<number | null>(null);
   const [error, setError] = useState("");
-  // Cuenta regresiva visible antes de reiniciar tras instalar (null = no
-  // hay cuenta en curso).
   const [restartIn, setRestartIn] = useState<number | null>(null);
   // Evita doble arranque (StrictMode en desarrollo) de la descarga.
   const startedRef = useRef(false);
+  const updateRef = useRef<Update | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,8 +106,9 @@ export function UpdateChecker() {
       try {
         const update = await check({ timeout: 15_000 });
         if (!update || cancelled) return;
+        updateRef.current = update;
         setVersion(update.version);
-        await install(update);
+        await handleDownload(update);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -129,13 +129,13 @@ export function UpdateChecker() {
     };
   }, []);
 
-  async function install(update: Update): Promise<void> {
+  async function handleDownload(update: Update): Promise<void> {
     setPhase("downloading");
     setPercent(null);
     setRestartIn(null);
     let downloaded = 0;
     let contentLength = 0;
-    await update.downloadAndInstall((event) => {
+    await update.download((event) => {
       if (event.event === "Started") {
         contentLength = event.data.contentLength ?? 0;
       } else if (event.event === "Progress") {
@@ -146,22 +146,28 @@ export function UpdateChecker() {
       }
     });
     setPhase("installing");
-    // La app NO se cierra de golpe: tras instalar espera con un contador
-    // visible antes de reiniciar. (En Windows el instalador puede cerrar el
-    // proceso antes de llegar a 0; en macOS/Linux el reinicio ocurre aquí.)
+    // La app muestra la tarjeta con la cuenta regresiva durante 5 segundos completos.
+    // Solo cuando el contador llega a 0 se ejecuta la instalación y el reinicio.
     setRestartIn(RESTART_DELAY_SEC);
   }
 
   // Cuenta regresiva antes del reinicio: baja 1 segundo a la vez y, al
-  // llegar a 0, reinicia. Si el reinicio falla, se muestra el error y la
-  // próxima apertura reintenta.
+  // llegar a 0, instala el paquete descargado y reinicia la app.
   useEffect(() => {
     if (phase !== "installing" || restartIn === null) return;
     if (restartIn <= 0) {
-      void relaunch().catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
-        setPhase("error");
-      });
+      void (async () => {
+        try {
+          if (updateRef.current) {
+            await updateRef.current.install();
+          } else {
+            await relaunch();
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+          setPhase("error");
+        }
+      })();
       return;
     }
     const timer = window.setTimeout(

@@ -1,7 +1,7 @@
 {
   "name": "av-music",
   "private": true,
-  "version": "0.5.10",
+  "version": "0.5.11",
   "type": "module",
   "description": "Reproductor de música local elegante, rápido y moderno de escritorio con resolución limpia de metadatos, búsqueda, descarga sin sesión y letras sincronizadas.",
   "scripts": {
