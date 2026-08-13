@@ -9,8 +9,9 @@ import { cn } from "@/lib/cn";
 type Phase = "idle" | "downloading" | "installing" | "error";
 
 /** Retraso tras el arranque antes de comprobar actualizaciones: la
- * comprobación nunca debe ralentizar la apertura de la app. */
-const CHECK_DELAY_MS = 4000;
+ * comprobación nunca debe ralentizar la apertura de la app, y la tarjetita
+ * aparece unos segundos después de abrir, cuando el usuario ya la puede ver. */
+const CHECK_DELAY_MS = 10_000;
 
 /**
  * Anillo de progreso circular: el icono de descarga en el centro y el anillo
