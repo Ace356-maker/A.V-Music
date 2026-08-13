@@ -18,7 +18,6 @@ import { CoverCrossfade } from "@/components/ui/CoverCrossfade";
 import { useTrackCover } from "@/lib/useTrackCover";
 import { VolumeIcon } from "@/components/ui/VolumeIcon";
 import { formatDuration } from "@/lib/format";
-import { displayTitle } from "@/lib/title";
 import { FullPlayer } from "@/features/player/components/FullPlayer";
 import { playerStore, usePlayer } from "@/features/player/playerStore";
 import { FADE_SEC } from "@/features/player/audioEngine";
@@ -176,9 +175,7 @@ export function PlayerBar() {
           className="min-w-0"
           style={{ animation: `av-cambio-in ${Math.round(FADE_SEC * 1000)}ms ease` }}
         >
-          <p className="truncate text-sm font-medium text-ink">
-            {displayTitle(current?.title, current?.artist) || "Sin pista"}
-          </p>
+          <p className="truncate text-sm font-medium text-ink">{current?.title ?? "Sin pista"}</p>
           <p className="truncate text-xs text-muted">
             {current?.artist ?? "Elige una canción de tu biblioteca"}
           </p>

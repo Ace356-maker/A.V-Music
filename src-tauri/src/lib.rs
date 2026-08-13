@@ -580,48 +580,141 @@ fn parse_artists_json(artists_json: &str) -> Vec<String> {
     out
 }
 
-/// YouTube Music guarda el título SIN colaboradores ("Mind On You" con
-/// artistas ["George Birge", "Kidd G", "charlieonnafriday"]) y su interfaz
-/// muestra "Mind On You (con charlieonnafriday)" generado desde los
-/// artistas. Aquí se replican los colaboradores que el título no mencione
-/// para que la app muestre lo mismo que YT Music. Si el título ya nombra a
-/// algún artista ("(feat. X)", "(con X)"), se respeta tal cual: agregar
-/// más sería redundante.
-fn enrich_title_with_collaborators(title: &str, artists_json: &str) -> String {
-    let Ok(artists) = serde_json::from_str::<Vec<String>>(artists_json) else {
-        return title.to_string();
+/// Consulta la API cruda de YouTube Music (youtubei/v1/search, la misma que
+/// usa su interfaz) y devuelve el título EXACTO por id de vídeo. yt-dlp
+/// "limpia" los títulos de la pestaña de canciones: le quita los
+/// colaboradores del paréntesis ("Mind On You (con charlieonnafriday)" →
+/// "Mind On You") y los mueve a la lista de artistas; la API cruda los
+/// conserva tal cual, que es lo que muestra YT Music. Si la consulta falla,
+/// el mapa queda vacío y la búsqueda usa el título de yt-dlp (correcto
+/// cuando el nombre no trae colaboradores).
+fn ytmusic_exact_titles(query: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let body = format!(
+        r#"{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240722.01.00","hl":"es"}}}},"query":{},"params":"EgWKAQIIAWoKEAoQCRADEAA%3D"}}"#,
+        serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_string())
+    );
+    let output = command("curl")
+        .args([
+            "-s",
+            "-L",
+            "--fail",
+            "--max-time",
+            "8",
+            "-H",
+            "Content-Type: application/json",
+            "-A",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+            "-d",
+            body.as_str(),
+            "https://music.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+        ])
+        .output()
+        .ok();
+    let Some(output) = output else {
+        return out;
     };
-    if artists.len() < 2 {
-        return title.to_string();
+    if !output.status.success() {
+        return out;
     }
-    let haystack = title.to_lowercase();
-    if artists.iter().any(|artist| {
-        let name = artist.trim();
-        !name.is_empty() && haystack.contains(&name.to_lowercase())
-    }) {
-        return title.to_string();
-    }
-    // Artistas únicos (YT Music repite a veces el mismo crédito varias
-    // veces): si tras deduplicar no queda más de uno, no hay colaborador.
-    let mut unique: Vec<String> = Vec::new();
-    for artist in &artists {
-        let name = artist.trim();
-        if name.is_empty() {
-            continue;
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return out;
+    };
+    // Recorrido del JSON (el esquema cambia a menudo): cualquier
+    // musicResponsiveListItemRenderer con watchEndpoint de vídeo cuenta.
+    fn walk(value: &serde_json::Value, out: &mut std::collections::HashMap<String, String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(renderer) = map.get("musicResponsiveListItemRenderer") {
+                    if let Some((id, title)) = ytmusic_song_title(renderer) {
+                        out.insert(id, title);
+                    }
+                }
+                for child in map.values() {
+                    walk(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    walk(child, out);
+                }
+            }
+            _ => {}
         }
-        let lower = name.to_lowercase();
-        if !unique.iter().any(|existing| existing.to_lowercase() == lower) {
-            unique.push(name.to_string());
-        }
     }
-    if unique.len() < 2 {
-        return title.to_string();
+    walk(&json, &mut out);
+    out
+}
+
+/// Extrae (videoId, título exacto) de un `musicResponsiveListItemRenderer`
+/// de la API de YT Music. Solo las entradas de canción/vídeo (con
+/// watchEndpoint de vídeo) cuentan; los álbumes, artistas y listas no.
+fn ytmusic_song_title(renderer: &serde_json::Value) -> Option<(String, String)> {
+    let runs = renderer
+        .pointer("/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text/runs")?
+        .as_array()?;
+    let id = runs
+        .first()?
+        .pointer("/navigationEndpoint/watchEndpoint/videoId")?
+        .as_str()?;
+    if id.is_empty() {
+        return None;
     }
-    // El primero es el artista principal; el resto son los colaboradores.
-    format!("{title} (con {})", unique[1..].join(" & "))
+    let title = runs
+        .iter()
+        .filter_map(|run| run.get("text").and_then(|text| text.as_str()))
+        .collect::<String>();
+    if title.is_empty() || title == "NA" {
+        return None;
+    }
+    Some((id.to_string(), title))
+}
+
+/// Lee el título EXACTO de la página de un vídeo de YouTube / YouTube
+/// Music (meta og:title). yt-dlp limpia los colaboradores del título
+/// ("Mind On You (con charlieonnafriday)" → "Mind On You"); la página los
+/// conserva. Si no se puede leer, `None` (se usa el título de yt-dlp).
+fn fetch_og_title(url: &str) -> Option<String> {
+    let output = command("curl")
+        .args([
+            "-s",
+            "-L",
+            "--fail",
+            "--max-time",
+            "12",
+            "-A",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        ])
+        .arg(url)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let html = String::from_utf8_lossy(&output.stdout);
+    let marker = r#"<meta property="og:title" content=""#;
+    let start = html.find(marker)? + marker.len();
+    let rest = &html[start..];
+    let end = rest.find('"')?;
+    let title = rest[..end].trim().replace("&amp;", "&");
+    if title.is_empty() || title == "NA" {
+        None
+    } else {
+        Some(title)
+    }
 }
 
 fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, String> {
+    // Título EXACTO de YT Music en paralelo con la extracción de yt-dlp: la
+    // API cruda conserva "(con charlieonnafriday)" que yt-dlp mutila (lo
+    // quita del título y lo mete en los artistas). Si la API falla, se usa
+    // el título de yt-dlp tal cual.
+    let (exact_tx, exact_rx) = std::sync::mpsc::channel();
+    let api_query = query.to_string();
+    std::thread::spawn(move || {
+        let _ = exact_tx.send(ytmusic_exact_titles(&api_query));
+    });
+
     let url = format!(
         "https://music.youtube.com/search?q={}#songs",
         urlencode(query)
@@ -654,11 +747,8 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             if parts.len() < 6 || parts[0].is_empty() {
                 return None;
             }
-            // YT Music guarda el título pelado ("Mind On You") y la interfaz
-            // agrega los colaboradores desde los artistas; aquí se replica
-            // eso: el título queda "Mind On You (con Kidd G &
-            // charlieonnafriday)". Si el título ya los menciona, se respeta
-            // tal cual ("crazy" = "crazy").
+            // Título tal cual lo da yt-dlp (sin generar colaboradores: los
+            // paréntesis exactos los pone después la API de YT Music).
             let title = parts[1].trim();
             let artists_json = parts[5].trim();
             let uploader = parts[3].trim();
@@ -668,7 +758,7 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             }
             Some(SearchHit {
                 id: parts[0].to_string(),
-                title: enrich_title_with_collaborators(title, artists_json),
+                title: title.to_string(),
                 uploader: if uploader.is_empty() || uploader == "NA" {
                     String::new()
                 } else {
@@ -685,6 +775,16 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             })
         })
         .collect();
+
+    // Fusión: el título exacto de la API (como lo muestra YT Music) gana
+    // sobre el de yt-dlp para los vídeos que ambas consultas comparten.
+    if let Ok(exact_titles) = exact_rx.recv_timeout(std::time::Duration::from_secs(12)) {
+        for hit in &mut hits {
+            if let Some(exact) = exact_titles.get(&hit.id) {
+                hit.title = exact.clone();
+            }
+        }
+    }
 
     // Los canales " - Topic" (audio puro de YouTube Music) primero; el resto
     // después. Así el mero Topic queda arriba y se descarga audio, no vídeo.
@@ -1330,25 +1430,21 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
     } else {
         fallback
     };
-    // El título queda EXACTAMENTE como lo trae YouTube Music: si la canción
-    // tiene colaboradores en el nombre, ytmusic ya los incluye; si no los
-    // incluye, no se le agregan aquí ("crazy" = "crazy").
+    // El título EXACTO lo da la página (meta og:title): yt-dlp le quita los
+    // colaboradores ("Mind On You (con charlieonnafriday)" → "Mind On You").
+    // Si no se puede leer, se queda el de yt-dlp. El título NUNCA se
+    // reescribe con el de LRCLIB: LRCLIB (y las demás fuentes) solo aportan
+    // la LETRA durante la descarga.
+    let title = fetch_og_title(url).unwrap_or_else(|| title.to_string());
     let uploader = parts[4].trim();
     let thumbnail = parts[5].trim();
     if title.is_empty() || title == "NA" {
         return Err("No pude leer la información de ese enlace.".to_string());
     }
 
-    // El título NUNCA se reescribe con el de LRCLIB: queda el que trae
-    // YouTube Music, que es el nombre real de la canción. LRCLIB (y las
-    // demás fuentes) solo aportan la LETRA
-    // durante la descarga — si su título se adoptara, entradas basura como
-    // "AOK (Official Video)" o "Una Vaina Loca (Paused)" bautizarían el
-    // archivo.
-
     Ok(SearchHit {
         id: parts[0].to_string(),
-        title: title.to_string(),
+        title,
         uploader: if uploader.is_empty() || uploader == "NA" {
             String::new()
         } else {
@@ -3804,52 +3900,29 @@ mod variant_title_tests {
     }
 
     #[test]
-    fn enrich_adds_missing_collaborators_from_ytmusic_artists() {
-        // El caso reportado: el título de YT Music es pelado y los artistas
-        // vienen aparte; la app debe mostrar lo mismo que la interfaz de
-        // YT Music ("Mind On You (con Kidd G & charlieonnafriday)").
+    fn ytmusic_song_title_extracts_the_exact_displayed_title() {
+        // Un renderer real de la API de YT Music: el título ya viene con los
+        // colaboradores en el paréntesis, tal cual lo muestra la interfaz.
+        let renderer = serde_json::json!({
+            "flexColumns": [{
+                "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                        "runs": [{
+                            "text": "Mind On You (con charlieonnafriday)",
+                            "navigationEndpoint": {
+                                "watchEndpoint": {"videoId": "2i8f9X7lELs"}
+                            }
+                        }]
+                    }
+                }
+            }]
+        });
         assert_eq!(
-            enrich_title_with_collaborators(
-                "Mind On You",
-                r#"["George Birge","Kidd G","charlieonnafriday"]"#,
-            ),
-            "Mind On You (con Kidd G & charlieonnafriday)"
+            ytmusic_song_title(&renderer),
+            Some(("2i8f9X7lELs".to_string(), "Mind On You (con charlieonnafriday)".to_string()))
         );
-    }
-
-    #[test]
-    fn enrich_leaves_titles_that_already_mention_artists() {
-        // El título ya menciona a los colaboradores: no se toca.
-        assert_eq!(
-            enrich_title_with_collaborators(
-                "Mind On You (con charlieonnafriday)",
-                r#"["George Birge","Kidd G","charlieonnafriday"]"#,
-            ),
-            "Mind On You (con charlieonnafriday)"
-        );
-        assert_eq!(
-            enrich_title_with_collaborators(
-                "crazy",
-                r#"["charlieonnafriday"]"#,
-            ),
-            "crazy"
-        );
-    }
-
-    #[test]
-    fn enrich_handles_bad_json_and_duplicate_artists() {
-        // Sin artistas parseables, sin colaboradores repetidos, sin cambios.
-        assert_eq!(
-            enrich_title_with_collaborators("crazy", ""),
-            "crazy"
-        );
-        assert_eq!(
-            enrich_title_with_collaborators(
-                "Mind On You",
-                r#"["Princess Shantel","Princess Shantel","Princess Shantel"]"#,
-            ),
-            "Mind On You"
-        );
+        // Entradas sin watchEndpoint de vídeo (álbumes, artistas) no cuentan.
+        assert!(ytmusic_song_title(&serde_json::json!({})).is_none());
     }
 
     #[test]

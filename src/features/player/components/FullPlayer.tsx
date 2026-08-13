@@ -32,7 +32,6 @@ import { SlideTitle } from "@/components/ui/SlideTitle";
 import { TrackCover } from "@/components/ui/TrackCover";
 import { VolumeIcon } from "@/components/ui/VolumeIcon";
 import { formatDuration } from "@/lib/format";
-import { displayTitle } from "@/lib/title";
 import { parseLyrics, type LrcLine } from "@/lib/lrc";
 import { useTrackCover } from "@/lib/useTrackCover";
 import { playerStore, usePlayer } from "@/features/player/playerStore";
@@ -383,7 +382,7 @@ export function FullPlayer({
     () =>
       current
         ? {
-            title: displayTitle(current.title, current.artist),
+            title: current.title,
             artist: artistLine,
           }
         : null,
@@ -954,7 +953,7 @@ export function FullPlayer({
                       {/* El nombre siempre ocupa UNA fila: si desborda el ancho
                           disponible, se desliza (marquee) como en la cola. */}
                       <SlideTitle
-                        text={displayTitle(current.title, current.artist)}
+                        text={current.title}
                         align="center"
                         className="font-display text-3xl font-semibold tracking-tight text-ink lg:text-4xl"
                       />
@@ -1116,7 +1115,7 @@ export function FullPlayer({
                           enfocar la fila no cambia nada del layout — solo
                           arranca el deslizamiento si desborda. */}
                       <SlideTitle
-                        text={displayTitle(track.title, track.artist)}
+                        text={track.title}
                         active={isCurrent}
                         className="text-sm font-medium text-ink"
                       />
