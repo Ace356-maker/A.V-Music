@@ -1251,37 +1251,12 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
         return Err("No pude leer la información de ese enlace.".to_string());
     }
 
-    // Si LRCLIB tiene la versión correcta (coincide la duración), su título
-    // exacto va a la tarjeta (ej: "Mind On You (feat. charlieonnafriday)").
-    // Solo se adopta cuando la coincidencia es CONFIABLE: sin eso, entradas
-    // basura de LRCLIB ("Una Vaina Loca (Paused)") contaminarían el título.
-    let artist_clean = uploader.strip_suffix(" - Topic").unwrap_or(uploader).trim();
-    let duration_sec = parts[3].parse::<u64>().ok();
-    let title = if let Some(result) = fetch_lyrics(artist_clean, &title, duration_sec) {
-        if result.confident {
-            let normalized = result
-                .track_name
-                .replace("(feat. ", "(con ")
-                .replace("(feat ", "(con ")
-                .replace("[feat. ", "[con ")
-                .replace("[feat ", "[con ");
-            // El título de LRCLIB solo se adopta si no pierde el marcador de
-            // variante del original ("Mind On You (con …)" nunca se degrada a
-            // "Mind On You"): ese paréntesis define la versión y la búsqueda
-            // de letras lo usa para distinguir remix de original.
-            let keeps_variant = !split_variant(&normalized).1.is_empty()
-                || split_variant(&title).1.is_empty();
-            if keeps_variant && normalized.to_lowercase() != title.to_lowercase() {
-                normalized
-            } else {
-                title.to_string()
-            }
-        } else {
-            title.to_string()
-        }
-    } else {
-        title.to_string()
-    };
+    // El título NUNCA se reescribe con el de LRCLIB: queda el que trae
+    // YouTube Music (ya enriquecido con los colaboradores), que es el nombre
+    // real de la canción. LRCLIB (y las demás fuentes) solo aportan la LETRA
+    // durante la descarga — si su título se adoptara, entradas basura como
+    // "AOK (Official Video)" o "Una Vaina Loca (Paused)" bautizarían el
+    // archivo.
 
     Ok(SearchHit {
         id: parts[0].to_string(),
@@ -1617,10 +1592,17 @@ fn split_variant(title: &str) -> (String, Vec<String>) {
 /// Resultado de LRCLIB: título canónico, letra sincronizada (si existe),
 /// letra plana (si existe) y si la coincidencia por duración es confiable
 /// (el llamador solo adopta el título de LRCLIB en ese caso).
+#[derive(Default)]
 struct LrcLibResult {
+    /// Título de la entrada elegida. Ya NO se adopta como nombre del archivo
+    /// (el título viene de YouTube Music); se conserva para los tests de red
+    /// que verifican que la fuente de letra no sea basura de formato.
+    #[allow(dead_code)]
     track_name: String,
     synced: Option<String>,
     plain: Option<String>,
+    /// Igual que `track_name`: solo lo leen los tests de red.
+    #[allow(dead_code)]
     confident: bool,
 }
 
@@ -1917,13 +1899,28 @@ fn fetch_lyrics(artist: &str, title: &str, duration_sec: Option<u64>) -> Option<
             None => false,
         }
     };
-    // Entradas basura tipo "…(Paused)": con la duración correcta pero son
-    // duplicados raros que nunca deberían ganar ni bautizar el título.
+    // Entradas basura que nunca deberían ganar ni bautizar el título:
+    // - "…(Paused)"/"…(Pause)": duplicados raros de LRCLIB.
+    // - Marcadores SOLO de formato de vídeo ("(Official Video)",
+    //   "(Lyric Video)", "(Audio)", "(Visualizer)"…): con la duración
+    //   correcta pero son la misma canción, no una variante real — si
+    //   ganaran, el título adoptado sería "AOK (Official Video)" en vez de
+    //   "AOK (with 24kGoldn)". Un título con marcador real ("remix",
+    //   "feat", un colaborador) nunca es junk.
     let is_junk_variant = |result: &serde_json::Value| -> bool {
-        split_variant(result["trackName"].as_str().unwrap_or(""))
-            .1
+        let markers = split_variant(result["trackName"].as_str().unwrap_or("")).1;
+        if markers.is_empty() {
+            return false;
+        }
+        if markers.iter().any(|marker| marker == "paused" || marker == "pause") {
+            return true;
+        }
+        const FORMAT_WORDS: [&str; 7] = [
+            "official", "video", "lyric", "lyrics", "audio", "visualizer", "music",
+        ];
+        markers
             .iter()
-            .any(|marker| marker == "paused" || marker == "pause")
+            .all(|marker| FORMAT_WORDS.contains(&marker.as_str()))
     };
 
     // La puntuación elige por marcador/artistas/duración, pero hay entradas
@@ -1975,8 +1972,15 @@ fn fetch_lyrics(artist: &str, title: &str, duration_sec: Option<u64>) -> Option<
             marker_rank == 0
         });
 
-    let track_name =
-        strip_artist_prefix(pick["trackName"].as_str().unwrap_or(title), &artist_parts);
+    // El título adoptado se limpia de marcadores de FORMATO de vídeo por si
+    // alguno se cuela ("AOK (Official Video)" → "AOK"): esos marcadores
+    // describen el vídeo, no la versión de la canción, y nunca deben
+    // bautizar el archivo. Los marcadores de variante reales (feat, remix,
+    // colaboradores) no se tocan.
+    let track_name = strip_format_markers(&strip_artist_prefix(
+        pick["trackName"].as_str().unwrap_or(title),
+        &artist_parts,
+    ));
     let synced = pick["syncedLyrics"].as_str().map(str::to_string);
     let plain = pick["plainLyrics"].as_str().map(str::to_string);
     if synced.is_none() && plain.is_none() {
@@ -3467,37 +3471,11 @@ fn download_sync(
     let ytmusic_result = ytmusic_rx.recv().unwrap_or(None);
     let (mxm_synced, mxm_plain) = mxm_rx.recv().unwrap_or((None, None));
 
-    // Cuando LRCLIB devuelve un título canónico más preciso que el de
-    // YouTube Music (p. ej. "Mind On You (feat. charlieonnafriday)" en vez
-    // de "Mind On You (con Kidd G & charlieonnafriday)"), lo usamos como
-    // título final: reemplazamos "feat." por "con" para uniformidad.
-    // Título canónico: se adopta el de LRCLIB solo cuando la coincidencia es
-    // CONFIABLE (la duración del candidato cuadra con la descargada). Así un
-    // remix con el mismo título que la original recibe su letra y una entrada
-    // basura de LRCLIB ("Una Vaina Loca (Paused)") nunca se cuela al título.
-    let canonical_title: String = match lrclib_result.as_ref() {
-        Some(result) if result.confident => {
-            let normalized = result
-                .track_name
-                .replace("(feat. ", "(con ")
-                .replace("(feat ", "(con ")
-                .replace("[feat. ", "[con ")
-                .replace("[feat ", "[con ");
-            // El título de LRCLIB solo se adopta si no pierde el marcador de
-            // variante del actual ("Mind On You (con Kidd G & …)" nunca se
-            // degrada a "Mind On You"): ese paréntesis define la versión y la
-            // búsqueda de letras lo usa para distinguir remix de original.
-            let keeps_variant = !split_variant(&normalized).1.is_empty()
-                || split_variant(title).1.is_empty();
-            if keeps_variant && normalized.to_lowercase() != title.to_lowercase() {
-                normalized
-            } else {
-                title.to_string()
-            }
-        }
-        _ => title.to_string(),
-    };
-    let title: &str = &canonical_title;
+    // El título del archivo es el que trae YouTube Music (el SearchHit, ya
+    // enriquecido con los colaboradores): LRCLIB SOLO aporta la letra, nunca
+    // reescribe el nombre. Así "Mind On You (con Kidd G & charlieonnafriday)"
+    // queda tal cual y la basura de LRCLIB ("…(Official Video)", "…(Paused)")
+    // no bautiza el MP3.
     // El título trae marcador de variante (remix, feat.…): se exige una
     // cobertura estricta de la duración para no incrustar la letra de otra
     // versión (la original dentro de un remix) con timestamps equivocados.
@@ -3683,7 +3661,7 @@ fn download_sync(
             sources_map.insert(source.to_string(), serde_json::Value::String(lrc.clone()));
         }
         let payload = serde_json::json!({
-            "title": canonical_title,
+            "title": title,
             "artist": artist_tag,
             "embedded": embedded_source,
             "sources": sources_map,
@@ -3907,5 +3885,34 @@ mod variant_title_tests {
             mxm_plain.to_lowercase().contains("only one way"),
             "la plana debe ser del remix, no de la original"
         );
+    }
+
+    /// "AOK (with 24kGoldn)" (el caso reportado): LRCLIB tiene una entrada
+    /// basura "AOK (Official Video)" con la duración casi exacta. El título
+    /// ya NO se adopta de LRCLIB (viene de YouTube Music), así que la única
+    /// forma de que el nombre se contamine sería que la LETRA se tomara de
+    /// esa entrada — la basura de formato debe quedar fuera del pool. Corre
+    /// con `cargo test -- --ignored` porque usa red real.
+    #[test]
+    #[ignore]
+    fn verify_aok_with_24kgoldn_lyrics_not_junk() {
+        let title = "AOK (with 24kGoldn)";
+        let artist = "Tai Verdes, 24kGoldn";
+        let duration = Some(181u64);
+
+        let lrclib = fetch_lyrics(artist, title, duration)
+            .expect("LRCLIB debe devolver letra para AOK");
+        eprintln!(
+            "LRCLIB elegido: {:?} (confident: {})",
+            lrclib.track_name, lrclib.confident
+        );
+        assert!(lrclib.confident, "la coincidencia debe ser confiable");
+        assert!(
+            !lrclib.track_name.to_lowercase().contains("official"),
+            "la letra no debe venir de la entrada de vídeo (Official Video)"
+        );
+        // El título final es el de YouTube Music, sin tocar: esta prueba solo
+        // garantiza que la fuente de letra no sea la basura de formato.
+        assert_eq!(title, "AOK (with 24kGoldn)");
     }
 }
