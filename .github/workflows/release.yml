@@ -37,6 +37,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # tauri-action NO instala las dependencias: sin `pnpm install` el
+      # beforeBuildCommand (`pnpm build`) falla en un runner limpio.
+      - name: Instalar dependencias del frontend
+        run: pnpm install --frozen-lockfile
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
