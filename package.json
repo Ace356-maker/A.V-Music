@@ -1,9 +1,9 @@
 {
   "name": "av-music",
   "private": true,
-  "version": "0.5.8",
+  "version": "0.5.9",
   "type": "module",
-  "description": "Reproductor de música local con visualizador reactivo",
+  "description": "Reproductor de música local elegante, rápido y moderno de escritorio con resolución limpia de metadatos, búsqueda, descarga sin sesión y letras sincronizadas.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

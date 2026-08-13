@@ -1472,6 +1472,21 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
     if let Some(spotify_id) = spotify_track_id(url) {
         return resolve_spotify_sync(app, &spotify_id);
     }
+
+    // Consulta paralela del og:description para extraer solo intérpretes reales
+    // (sin compositores ni productores que yt-dlp mezcla en %(artists)j).
+    let video_id = extract_video_id(url);
+    let (og_tx, og_rx) = std::sync::mpsc::channel();
+    let v_id = video_id.clone();
+    std::thread::spawn(move || {
+        let performers = v_id
+            .as_deref()
+            .and_then(fetch_og_description)
+            .and_then(|desc| parse_performers(&desc))
+            .unwrap_or_default();
+        let _ = og_tx.send(performers);
+    });
+
     // `%(track)s` es el nombre real de la canción en YouTube Music (a veces
     // `%(title)s` viene recortado o con texto extra); se cae a `%(title)s`
     // solo si `track` viene vacío.
@@ -1532,6 +1547,22 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
         return Err("No pude leer la información de ese enlace.".to_string());
     }
 
+    let og_performers = og_rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap_or_default();
+
+    let fallback_artists = parse_artists_json(parts[6].trim());
+    let artists = if !og_performers.is_empty() {
+        og_performers
+    } else if !fallback_artists.is_empty() {
+        fallback_artists
+    } else if !uploader.is_empty() && uploader != "NA" {
+        let clean_uploader = uploader.strip_suffix(" - Topic").unwrap_or(uploader).trim();
+        vec![clean_uploader.to_string()]
+    } else {
+        Vec::new()
+    };
+
     Ok(SearchHit {
         id: parts[0].to_string(),
         title,
@@ -1547,7 +1578,7 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
             thumbnail.to_string()
         },
         cover_url: None,
-        artists: parse_artists_json(parts[6].trim()),
+        artists,
     })
 }
 

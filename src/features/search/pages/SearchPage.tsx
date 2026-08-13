@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { IconCheck, IconDownload, IconFolderOpen, IconLoader2, IconMusic, IconSearch } from "@tabler/icons-react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -17,13 +17,25 @@ const ROW_HEIGHT = 64;
  * enlace de Spotify implica varias búsquedas de yt-dlp y tarda segundos;
  * al volver a pegar el mismo enlace, la tarjeta aparece al instante.
  */
-// v3: los artistas de los resultados cambiaron (solo intérpretes, sin
-// compositores) y el caché v2 guardaba resultados viejos con los créditos
+// v4: los artistas de los resultados cambiaron (solo intérpretes, sin
+// compositores) y el caché v3 guardaba resultados viejos con los créditos
 // completos — se invalida para que la próxima búsqueda traiga datos frescos.
-const RESOLVE_CACHE_KEY = "avmusic.resolveCache.v3";
+const RESOLVE_CACHE_KEY = "avmusic.resolveCache.v4";
 const RESOLVE_CACHE_LIMIT = 40;
 
+function clearOldCaches(): void {
+  try {
+    for (let i = 1; i <= 3; i++) {
+      localStorage.removeItem(`avmusic.resolveCache.v${i}`);
+      localStorage.removeItem(`avmusic.searchCache.v${i}`);
+    }
+  } catch {
+    // Sin acceso a localStorage.
+  }
+}
+
 function loadResolveCache(): Record<string, SearchHit> {
+  clearOldCaches();
   try {
     const raw = localStorage.getItem(RESOLVE_CACHE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
@@ -54,7 +66,7 @@ function cacheResolve(link: string, hit: SearchHit): void {
  * consulta (algo muy común al descargar de a una) ahora es instantáneo.
  * Con tiempo de vida para no quedarse con resultados eternamente viejos.
  */
-const SEARCH_CACHE_KEY = "avmusic.searchCache.v3";
+const SEARCH_CACHE_KEY = "avmusic.searchCache.v4";
 const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
 const SEARCH_CACHE_LIMIT = 30;
 
@@ -169,7 +181,7 @@ export default function SearchPage() {
     Boolean(downloaded[hit.id]) || libraryTitles.has(normalize(hit.title));
 
   /** Quita de la lista las descargas cuyo archivo ya no existe en disco. */
-  async function validateDownloaded(): Promise<void> {
+  const validateDownloaded = useCallback(async (): Promise<void> => {
     const entries = Object.entries(downloads.downloaded).filter(([, path]) => path);
     if (entries.length === 0) return;
     try {
@@ -187,14 +199,14 @@ export default function SearchPage() {
     } catch {
       // Si el chequeo falla, se conserva el estado actual.
     }
-  }
+  }, [downloads.downloaded]);
 
   useEffect(() => {
     void validateDownloaded();
     const onFocus = () => void validateDownloaded();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, []);
+  }, [validateDownloaded]);
 
   async function handleSearch(event?: FormEvent): Promise<void> {
     event?.preventDefault();

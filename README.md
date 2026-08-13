@@ -1,89 +1,75 @@
-# A.V Music — Reproductor de música con visualizador
+# 🎵 A.V Music — Reproductor de Música Local & Descargador (v0.5.9)
 
-Tu música, en tu disco. **A.V Music** es un reproductor local de escritorio:
-eliges una carpeta, escanea los metadatos en Rust, reproduce con Web Audio
-y, si quieres algo nuevo, **busca y descarga canciones sin iniciar sesión
-en nada** (yt-dlp por detrás, descargado automáticamente la primera vez).
+> **Tu música, en tu disco.** **A.V Music** es un reproductor de escritorio de alto rendimiento: escanea tu biblioteca local en milisegundos con Rust, reproduce audio local con fluidez y te permite **buscar, resolver enlaces (YouTube Music y Spotify) y descargar canciones en MP3 de alta calidad con metadatos limpios y letras sincronizadas**, todo sin cuentas ni servicios en la nube.
 
-Construido con **Tauri 2 + React 19 + TypeScript + Vite**, empaquetado con
-**pnpm**. Sin nube, sin cuentas: los archivos nunca salen de tu equipo.
+---
 
-## Stack
+## 🚀 Características Principales
 
-| Capa      | Tecnología |
-| --------- | ---------- |
-| Frontend  | React 19, TypeScript (strict), Tailwind CSS v4, Vite 6 |
-| Audio     | Web Audio API (`AudioContext` + `AnalyserNode`) |
-| Backend   | Rust (Tauri 2): `lofty` (metadatos), `rfd` (diálogo nativo), `walkdir`, subprocesos con `yt-dlp` |
-| Gestor    | pnpm |
+- **⚡ Biblioteca Local Ultra-Rápida:** Escaneo multinivel con Rust (`lofty` + `walkdir`) para MP3, FLAC, WAV, OGG, M4A, AAC y OPUS.
+- **🔍 Búsqueda & Enlaces Inteligentes:** Pega cualquier enlace de **YouTube Music** o **Spotify**. El sistema extrae el título exacto y resuelve automáticamente los intérpretes reales (filtrando compositores, arreglistas o productores).
+- **🎶 Descargas de Alta Calidad (MP3 V0):** Incorporación de portada oficial, etiquetas ID3v2 completas y letras sincronizadas (LRC/USLT) embebidas en el propio archivo.
+- **🎤 Letras Sincronizadas:** Visualización fluida de letras tipo karaoke en tiempo real.
+- **🛡️ 100% Privado y Offline:** Sin cuentas, sin rastreo y sin almacenamiento en la nube. Todos tus archivos permanecen en tu disco local.
+- **🚀 Cero Configuración:** `yt-dlp` y `ffmpeg` se descargan y gestionan de forma transparente en segundo plano cuando se necesitan.
 
-## Requisitos previos
+---
+
+## 🛠️ Stack Tecnológico
+
+| Capa | Tecnología |
+| :--- | :--- |
+| **Frontend** | React 19, TypeScript (Strict), Tailwind CSS v4, Vite 6 |
+| **Audio & UI Engine** | Web Audio API + HTML5 Audio Driver, React State Management |
+| **Backend & Core** | Rust (Tauri 2), `lofty` (metadatos audio), `rfd` (diálogos nativos), `walkdir`, subprocesos optimizados `yt-dlp` & `ffmpeg` |
+| **Paquetes** | pnpm |
+
+---
+
+## ⚙️ Requisitos Previos
 
 - **Node.js ≥ 20** y **pnpm**.
-- **Rust** (rustup, toolchain stable) y en Windows las **MSVC Build Tools**
-  (workload «Desarrollo de escritorio con C++») + WebView2.
-- **yt-dlp** en el PATH para la búsqueda y descarga de música
-  (instalable con `winget install yt-dlp.yt-dlp`). Para descargar en MP3,
-  también **ffmpeg** (si no está, se baja el mejor audio nativo igualmente).
+- **Rust Toolchain** (`rustup`, canal stable) y en Windows las **MSVC Build Tools** (desarrollo de escritorio con C++) + WebView2.
 
-## Puesta en marcha
+---
+
+## 📦 Puesta en Marcha
 
 ```bash
-pnpm install   # instala dependencias y genera los iconos de Tauri
-pnpm tauri dev # abre la ventana (hot-reload)
+# 1. Instalar dependencias
+pnpm install
+
+# 2. Iniciar en modo desarrollo con Hot-Reload (Tauri 2 + Vite)
+pnpm tauri dev
 ```
 
-Para producción: `pnpm tauri build`.
-
-## Cómo funciona
-
-1. **Importar carpeta** → el diálogo nativo (`rfd`) elige la carpeta y
-   `scan_folder` (Rust) la recorre con `walkdir`, lee metadatos y carátulas
-   con `lofty` (MP3, FLAC, WAV, OGG, M4A, AAC, OPUS) y devuelve la lista.
-2. **Reproducción** → `read_audio_file` (Rust) lee el archivo en base64 y el
-   frontend lo decodifica con `AudioContext.decodeAudioData`.
-3. **Buscar y descargar** → `yt_search` (Rust) lanza `yt-dlp` contra la
-   pestaña **Songs de YouTube Music** (solo canciones: audio oficial y
-   Topic, nunca vídeos) y `yt_download` baja el audio a `Descargas/A.V Music` en
-   **   MP3 V0 de alta calidad con metadatos embebidos y **carátula del álbum**
-   (la miniatura del vídeo Topic, que es la portada oficial) + letra de
-   LRCLIB incrustada en el archivo (tag USLT, sin `.lrc` aparte) y
-   **progreso en vivo** (porcentaje + velocidad por eventos de Tauri).
-   Puedes elegir la carpeta de descargas. Pegar un enlace también funciona
-   (`yt_resolve`). La descarga se fusiona al instante en tu biblioteca (sin
-   duplicados) y las versiones (remix, instrumental, en vivo…) se distinguen
-   con una etiqueta. La primera búsqueda descarga `yt-dlp` automáticamente
-   (con `curl`) y `ffmpeg` se auto-descarga la primera vez que se necesita
-   para el MP3 (build BtbN en el directorio de datos) — sin que tengas que
-   instalar nada. Búsqueda, descarga y lectura de archivos corren fuera del
-   hilo principal: la UI nunca se congela.
-
-## Arquitectura
-
+Para generar la compilación de producción:
+```bash
+pnpm tauri build
 ```
+
+---
+
+## 📂 Estructura del Proyecto
+
+```text
 src/
-├── app/                    # App.tsx (vistas)
+├── app/                    # Entrada principal de la aplicación y layouts
 ├── components/
-│   ├── layout/             # AppLayout (sidebar + contenido + PlayerBar)
-│   └── ui/                 # Button, BrandMark, RangeSlider
+│   ├── layout/             # AppLayout (sidebar, contenido principal, PlayerBar)
+│   └── ui/                 # Componentes UI reutilizables (Button, RangeSlider, etc.)
 ├── features/
-│   ├── library/            # store + LibraryPage (importar y listar)
-│   ├── player/             # audioEngine.ts (Web Audio) · playerStore.ts
-│   │   └── components/     # PlayerBar
-│   └── search/             # SearchPage (buscar y descargar sin cuenta)
-├── lib/                    # cn, format
-├── styles/                 # global.css (tokens OKLCH)
-└── types/                  # Track
-src-tauri/src/lib.rs        # Comandos: scan_folder, pick_folder, read_audio_file, yt_search, yt_download
+│   ├── library/            # Gestión de biblioteca local e importación de carpetas
+│   ├── player/             # Motor de audio (`audioEngine.ts`) y estado del reproductor
+│   └── search/             # Búsqueda, descarga y resolución de enlaces
+├── lib/                    # Formateadores y utilidades
+├── styles/                 # Tokens del sistema de diseño (OKLCH, Tailwind v4)
+└── types/                  # Definición de tipos de datos (Track, SearchHit, etc.)
+src-tauri/src/lib.rs        # Núcleo Rust: escaneo de carpetas, resolución y descargas yt-dlp
 ```
 
-- **Estado sin librerías**: stores externos con `useSyncExternalStore`
-  (biblioteca y reproductor), persistidos en `localStorage`.
-- **Rutas absolutas**: alias `@/` → `src/`.
-- **Design system**: `design.md` + tokens en `src/styles/global.css`.
+---
 
-## Próximos pasos
+## 📄 Licencia & Filosofía
 
-1. Cola «suena después» y listas de reproducción.
-2. Estadísticas de escucha reales (historial en SQLite).
-3. Historial de descargas con progreso en vivo.
+Proyecto de código abierto enfocado en la velocidad, el diseño minimalista inmersivo y el respeto total a la privacidad del usuario.
