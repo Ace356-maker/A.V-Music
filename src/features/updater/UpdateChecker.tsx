@@ -3,7 +3,6 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { IconCheck, IconDownload } from "@tabler/icons-react";
 
-import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
 
 type Phase = "idle" | "downloading" | "installing" | "error";
@@ -82,16 +81,15 @@ function ProgressRing({
  * hay una versión nueva y, si la hay, EMPIEZA A DESCARGARLA SOLA. Un modal
  * centrado (estilo del resto de la app) muestra el progreso con un anillo
  * circular y el icono de descarga en el centro; al terminar instala y
- * reinicia. La instalación es silenciosa (no abre el instalador). Si algo
- * falla, el modal ofrece reintentar o cerrar; la app nunca se bloquea por la
- * comprobación.
+ * reinicia. La instalación es silenciosa (no abre el instalador). La tarjeta
+ * es 100% automática: sin botones. Si algo falla, se cierra sola a los pocos
+ * segundos y la app vuelve a comprobar en la próxima apertura.
  */
 export function UpdateChecker() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [version, setVersion] = useState("");
   const [percent, setPercent] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const pendingUpdate = useRef<Update | null>(null);
   // Evita doble arranque (StrictMode en desarrollo) de la descarga.
   const startedRef = useRef(false);
 
@@ -102,7 +100,6 @@ export function UpdateChecker() {
       try {
         const update = await check({ timeout: 15_000 });
         if (!update || cancelled) return;
-        pendingUpdate.current = update;
         setVersion(update.version);
         await install(update);
       } catch (err) {
@@ -146,27 +143,13 @@ export function UpdateChecker() {
     await relaunch();
   }
 
-  /** Cancela la descarga en curso y cierra el modal. */
-  async function cancel(): Promise<void> {
-    const update = pendingUpdate.current;
-    if (update) {
-      try {
-        await update.close();
-      } catch {
-        // Si ya no se puede abortar, la instalación termina igual: sin drama.
-      }
-    }
-    setPhase("idle");
-  }
-
-  function retry(): void {
-    const update = pendingUpdate.current;
-    if (!update) return;
-    void install(update).catch((err) => {
-      setError(err instanceof Error ? err.message : String(err));
-      setPhase("error");
-    });
-  }
+  // Si la actualización falla, el modal se cierra solo a los pocos segundos:
+  // la app vuelve a comprobar en la próxima apertura.
+  useEffect(() => {
+    if (phase !== "error") return;
+    const timer = window.setTimeout(() => setPhase("idle"), 4000);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
 
   if (phase === "idle") return null;
 
@@ -205,28 +188,11 @@ export function UpdateChecker() {
           </div>
         </div>
 
-        {/* Durante la descarga: cancelar discreto */}
-        {phase === "downloading" && (
-          <div className="mt-5 flex justify-center">
-            <Button variant="ghost" className="px-3 py-1.5 text-xs" onClick={() => void cancel()}>
-              Cancelar
-            </Button>
-          </div>
-        )}
-
-        {/* Error: mensaje + reintentar */}
+        {/* Error: mensaje (el modal se cierra solo en unos segundos) */}
         {phase === "error" && (
-          <>
-            <p className="mt-3 text-center text-xs leading-relaxed text-muted">
-              {error || "Revisa tu conexión e inténtalo de nuevo."}
-            </p>
-            <div className="mt-5 flex items-center justify-center gap-2">
-              <Button variant="ghost" onClick={() => setPhase("idle")}>
-                Cerrar
-              </Button>
-              <Button onClick={retry}>Reintentar</Button>
-            </div>
-          </>
+          <p className="mt-3 text-center text-xs leading-relaxed text-muted">
+            {error || "Revisa tu conexión e inténtalo de nuevo."}
+          </p>
         )}
       </div>
     </div>

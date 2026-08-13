@@ -39,15 +39,27 @@ import { FADE_SEC, getActiveTrackId } from "@/features/player/audioEngine";
 import { useCrossfadeLayer } from "@/features/player/useCrossfadeLayer";
 
 /** Separa el artista principal del resto (p. ej. "Duki, Feid" → Duki + Feid). */
-function splitArtists(artist: string | null | undefined): { main: string; secondary: string } {
+function splitArtists(artist: string | null | undefined): { main: string; secondary: string[] } {
   const parts = (artist ?? "")
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
   return {
     main: parts[0] ?? "",
-    secondary: parts.slice(1).join(" · "),
+    secondary: parts.slice(1),
   };
+}
+
+/** ¿El título ya menciona a TODOS estos artistas (p. ej. "feat. Chingy & JD
+ * Walker")? Si el título los nombra, repetirlos en una fila aparte es
+ * redundante y la fila se omite: la información ya está arriba. */
+function titleMentionsAll(title: string | null | undefined, names: string[]): boolean {
+  if (!title || names.length === 0) return false;
+  const haystack = title.toLowerCase();
+  return names.every((name) => {
+    const trimmed = name.trim().toLowerCase();
+    return trimmed.length > 0 && haystack.includes(trimmed);
+  });
 }
 
 /** Etiquetas legibles de cada fuente de letra del sidecar .avlr.json. */
@@ -368,7 +380,12 @@ export function FullPlayer({
   // FADE_SEC (~1.2 s), no hay capa de salida: entra al instante y no
   // parpadea.
   const fadeInMs = Math.round(FADE_SEC * 1000);
-  const { main: mainArtist, secondary: secondaryArtist } = splitArtists(current?.artist);
+  const { main: mainArtist, secondary: secondaryArtists } = splitArtists(current?.artist);
+  // La fila de colaboradores solo se muestra cuando aporta algo: si el
+  // título ya los nombra ("Wrangler (Remix) [feat. Chingy & JD Walker]"),
+  // repetirlos debajo es un duplicado y se omite.
+  const showSecondaryArtists = !titleMentionsAll(current?.title, secondaryArtists);
+  const secondaryArtist = secondaryArtists.join(" · ");
 
   const prevLayer = useCrossfadeLayer(
     current?.id ?? null,
@@ -389,7 +406,12 @@ export function FullPlayer({
     fadeInMs,
     () =>
       current
-        ? { title: current.title, main: mainArtist, secondary: secondaryArtist }
+        ? {
+            title: current.title,
+            main: mainArtist,
+            secondary: secondaryArtist,
+            showSecondary: showSecondaryArtists,
+          }
         : null,
   );
 
@@ -944,7 +966,7 @@ export function FullPlayer({
                             {prevTitleLayer.main}
                           </p>
                         )}
-                        {prevTitleLayer.secondary && (
+                        {prevTitleLayer.showSecondary && prevTitleLayer.secondary && (
                           <p className="truncate text-sm text-faint">{prevTitleLayer.secondary}</p>
                         )}
                       </div>
@@ -970,7 +992,7 @@ export function FullPlayer({
                           {mainArtist}
                         </p>
                       )}
-                      {secondaryArtist && (
+                      {secondaryArtist && showSecondaryArtists && (
                         <p className="truncate text-sm text-faint">{secondaryArtist}</p>
                       )}
                     </div>
