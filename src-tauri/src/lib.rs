@@ -2153,6 +2153,41 @@ struct SongMeta {
     album: Option<String>,
 }
 
+/// Decide la nómina de intérpretes para el tag del MP3 a partir del canal y
+/// los artistas del metadato (máx. 3: los intérpretes van primero y detrás
+/// vienen compositores y productores).
+/// - Canal Topic con varios nombres ("Fuego, Manuel Turizo, Duki - Topic"):
+///   la nómina del canal es la oficial (sin productores).
+/// - Canal Topic con un solo nombre o canal del artista (no-Topic): artistas
+///   del metadato — antes solo se usaba el primero y las colaboraciones sin
+///   versión Topic (p. ej. "Mind On You" con Kidd G y charlieonnafriday)
+///   perdían al resto de cantantes.
+fn pick_artist_tag(channel: &str, channel_singers: &[String], all: &[String]) -> Option<String> {
+    let is_topic = channel.to_lowercase().ends_with(" - topic");
+    let tag = if is_topic {
+        if channel_singers.len() >= 2 {
+            channel_singers.join(", ")
+        } else if !all.is_empty() {
+            all.iter().take(3).cloned().collect::<Vec<String>>().join(", ")
+        } else if !channel_singers.is_empty() {
+            channel_singers.join(", ")
+        } else {
+            return None;
+        }
+    } else if !all.is_empty() {
+        all.iter().take(3).cloned().collect::<Vec<String>>().join(", ")
+    } else if !channel.is_empty() {
+        channel.to_string()
+    } else {
+        return None;
+    };
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag)
+    }
+}
+
 fn fetch_meta(app: &tauri::AppHandle, url: &str) -> Option<SongMeta> {
     let output = ytdlp(
         app,
@@ -2203,36 +2238,7 @@ fn fetch_meta(app: &tauri::AppHandle, url: &str) -> Option<SongMeta> {
         .filter(|name| !name.is_empty())
         .map(str::to_string)
         .collect();
-    let artist_tag = if is_topic {
-        if channel_singers.len() >= 2 {
-            channel_singers.join(", ")
-        } else if !all.is_empty() {
-            // Canal con un solo nombre (p. ej. feat. bajo el principal): se
-            // usan los artistas del metadato, solo los principales (máx. 3) —
-            // los intérpretes van primero y detrás vienen compositores y
-            // productores ("Fuego, Manuel Turizo, Duki, Miguel Angel Duran,
-            // …").
-            all.iter()
-                .take(3)
-                .cloned()
-                .collect::<Vec<String>>()
-                .join(", ")
-        } else if !channel_singers.is_empty() {
-            channel_singers.join(", ")
-        } else {
-            return None;
-        }
-    } else if !all.is_empty() {
-        // Solo el principal (sin productores ni compositores).
-        all[0].clone()
-    } else if !channel.is_empty() {
-        channel.to_string()
-    } else {
-        return None;
-    };
-    if artist_tag.is_empty() {
-        return None;
-    }
+    let artist_tag = pick_artist_tag(channel, &channel_singers, &all)?;
 
     let album = if album_raw.is_empty() || album_raw == "NA" {
         None
@@ -3923,6 +3929,63 @@ mod variant_title_tests {
         );
         // Entradas sin watchEndpoint de vídeo (álbumes, artistas) no cuentan.
         assert!(ytmusic_song_title(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn pick_artist_tag_keeps_all_collaborators() {
+        let singers = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let channel_singers = |channel: &str| {
+            channel
+                .strip_suffix(" - Topic")
+                .unwrap_or(channel)
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+
+        // Colaboración sin versión Topic (canal del artista): TODOS los
+        // intérpretes del metadato, antes solo quedaba el primero.
+        assert_eq!(
+            pick_artist_tag(
+                "George Birge",
+                &channel_singers("George Birge"),
+                &singers(&["George Birge", "Kidd G", "charlieonnafriday"]),
+            ),
+            Some("George Birge, Kidd G, charlieonnafriday".to_string())
+        );
+        // Canción de un solo artista: se queda igual.
+        assert_eq!(
+            pick_artist_tag(
+                "George Birge",
+                &channel_singers("George Birge"),
+                &singers(&["George Birge"]),
+            ),
+            Some("George Birge".to_string())
+        );
+        // Topic con varios nombres: nómina del canal (oficial, sin
+        // productores).
+        assert_eq!(
+            pick_artist_tag(
+                "Fuego, Don Omar, Farruko & Natti Natasha - Topic",
+                &channel_singers("Fuego, Don Omar, Farruko & Natti Natasha - Topic"),
+                &singers(&["Fuego, Don Omar, Farruko & Natti Natasha"]),
+            ),
+            Some("Fuego, Don Omar, Farruko & Natti Natasha".to_string())
+        );
+        // Topic con un solo nombre: artistas del metadato, máx. 3 (detrás
+        // vienen compositores y productores que se descartan).
+        assert_eq!(
+            pick_artist_tag(
+                "Fuego - Topic",
+                &channel_singers("Fuego - Topic"),
+                &singers(&[
+                    "Fuego", "Manuel Turizo", "Duki", "Miguel Angel Duran", "Windel B Edwards",
+                ]),
+            ),
+            Some("Fuego, Manuel Turizo, Duki".to_string())
+        );
     }
 
     #[test]

@@ -301,7 +301,11 @@ export default function SearchPage() {
       const url = `https://www.youtube.com/watch?v=${target.id}`;
       const result = await invoke<DownloadResult>("yt_download", {
         url,
-        artist: target.uploader,
+        // Todos los intérpretes cuando el resultado los trae (el canal solo
+        // tiene el primero); el backend igualmente los recalcula al descargar.
+        artist: (target.artists && target.artists.length > 0
+          ? target.artists.join(", ")
+          : target.uploader) || "",
         title: target.title,
         dir: downloadDir,
         // Carátula del álbum de Spotify cuando el hit vino de un enlace de
