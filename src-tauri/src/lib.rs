@@ -544,6 +544,47 @@ async fn yt_search(app: tauri::AppHandle, query: String) -> Result<Vec<SearchHit
         .map_err(|err| format!("Búsqueda interrumpida: {err}"))?
 }
 
+/// YouTube Music guarda el título SIN colaboradores ("Mind On You" con
+/// artistas ["George Birge", "Kidd G", "charlieonnafriday"]) y su interfaz
+/// muestra "Mind On You (con charlieonnafriday)" generado desde los
+/// artistas. Aquí se replican los colaboradores que el título no mencione
+/// para que la app muestre lo mismo que YT Music. Si el título ya nombra a
+/// algún artista ("(feat. X)", "(con X)"), se respeta tal cual: agregar
+/// más sería redundante.
+fn enrich_title_with_collaborators(title: &str, artists_json: &str) -> String {
+    let Ok(artists) = serde_json::from_str::<Vec<String>>(artists_json) else {
+        return title.to_string();
+    };
+    if artists.len() < 2 {
+        return title.to_string();
+    }
+    let haystack = title.to_lowercase();
+    if artists.iter().any(|artist| {
+        let name = artist.trim();
+        !name.is_empty() && haystack.contains(&name.to_lowercase())
+    }) {
+        return title.to_string();
+    }
+    // Artistas únicos (YT Music repite a veces el mismo crédito varias
+    // veces): si tras deduplicar no queda más de uno, no hay colaborador.
+    let mut unique: Vec<String> = Vec::new();
+    for artist in &artists {
+        let name = artist.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_lowercase();
+        if !unique.iter().any(|existing| existing.to_lowercase() == lower) {
+            unique.push(name.to_string());
+        }
+    }
+    if unique.len() < 2 {
+        return title.to_string();
+    }
+    // El primero es el artista principal; el resto son los colaboradores.
+    format!("{title} (con {})", unique[1..].join(" & "))
+}
+
 fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, String> {
     let url = format!(
         "https://music.youtube.com/search?q={}#songs",
@@ -577,11 +618,13 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             if parts.len() < 6 || parts[0].is_empty() {
                 return None;
             }
-            // El título queda EXACTAMENTE como lo trae YouTube Music: si la
-            // canción tiene colaboradores en el nombre, ytmusic ya los
-            // incluye ("Mind On You (con Kidd G & charlieonnafriday)"); si
-            // no los incluye, no se le agregan aquí ("crazy" = "crazy").
+            // YT Music guarda el título pelado ("Mind On You") y la interfaz
+            // agrega los colaboradores desde los artistas; aquí se replica
+            // eso: el título queda "Mind On You (con Kidd G &
+            // charlieonnafriday)". Si el título ya los menciona, se respeta
+            // tal cual ("crazy" = "crazy").
             let title = parts[1].trim();
+            let artists_json = parts[5].trim();
             let uploader = parts[3].trim();
             let thumbnail = parts[4].trim();
             if title.is_empty() || title == "NA" {
@@ -589,7 +632,7 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             }
             Some(SearchHit {
                 id: parts[0].to_string(),
-                title: title.to_string(),
+                title: enrich_title_with_collaborators(title, artists_json),
                 uploader: if uploader.is_empty() || uploader == "NA" {
                     String::new()
                 } else {
@@ -3712,6 +3755,55 @@ mod variant_title_tests {
         // Un marcador de una sola palabra sigue igual (remix, paused…).
         let (_, remix) = split_variant("Calma (Remix)");
         assert_eq!(remix, vec!["remix".to_string()]);
+    }
+
+    #[test]
+    fn enrich_adds_missing_collaborators_from_ytmusic_artists() {
+        // El caso reportado: el título de YT Music es pelado y los artistas
+        // vienen aparte; la app debe mostrar lo mismo que la interfaz de
+        // YT Music ("Mind On You (con Kidd G & charlieonnafriday)").
+        assert_eq!(
+            enrich_title_with_collaborators(
+                "Mind On You",
+                r#"["George Birge","Kidd G","charlieonnafriday"]"#,
+            ),
+            "Mind On You (con Kidd G & charlieonnafriday)"
+        );
+    }
+
+    #[test]
+    fn enrich_leaves_titles_that_already_mention_artists() {
+        // El título ya menciona a los colaboradores: no se toca.
+        assert_eq!(
+            enrich_title_with_collaborators(
+                "Mind On You (con charlieonnafriday)",
+                r#"["George Birge","Kidd G","charlieonnafriday"]"#,
+            ),
+            "Mind On You (con charlieonnafriday)"
+        );
+        assert_eq!(
+            enrich_title_with_collaborators(
+                "crazy",
+                r#"["charlieonnafriday"]"#,
+            ),
+            "crazy"
+        );
+    }
+
+    #[test]
+    fn enrich_handles_bad_json_and_duplicate_artists() {
+        // Sin artistas parseables, sin colaboradores repetidos, sin cambios.
+        assert_eq!(
+            enrich_title_with_collaborators("crazy", ""),
+            "crazy"
+        );
+        assert_eq!(
+            enrich_title_with_collaborators(
+                "Mind On You",
+                r#"["Princess Shantel","Princess Shantel","Princess Shantel"]"#,
+            ),
+            "Mind On You"
+        );
     }
 
     #[test]
