@@ -16,6 +16,9 @@ on:
   push:
     tags:
       - "v*"
+  # También se puede lanzar a mano desde la pestaña Actions (útil para
+  # re-probar sin tocar tags).
+  workflow_dispatch:
 
 jobs:
   release:
