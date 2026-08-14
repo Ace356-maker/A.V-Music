@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { IconCheck, IconDownload, IconFolderOpen, IconLoader2, IconMusic, IconSearch } from "@tabler/icons-react";
+import {
+  IconCheck,
+  IconDownload,
+  IconFolderOpen,
+  IconLoader2,
+  IconMusic,
+  IconRefresh,
+  IconSearch,
+} from "@tabler/icons-react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { Button } from "@/components/ui/Button";
@@ -165,7 +173,8 @@ export default function SearchPage() {
   // al cambio de vista (query, resultados, selección, progreso, lote y
   // descargadas se conservan al volver a Buscar).
   const downloads = useDownloads();
-  const { progress, active, downloaded, query, results, isPlaylist, selected } = downloads;
+  const { progress, active, failed, downloaded, query, results, isPlaylist, selected } =
+    downloads;
   const batchProgress = downloads.batch;
   const batchStatus = batchProgress ? batchProgress.status : {};
 
@@ -250,7 +259,16 @@ export default function SearchPage() {
           hit = await invoke<SearchHit>("yt_resolve", { url: q });
           cacheResolve(q, hit);
         }
-        downloadStore.setSession({ query: q, results: [hit] });
+        // Los enlaces pegados se ACUMULAN en vez de reemplazar los
+        // resultados: puedes poner a descargar uno y pegar el siguiente
+        // mientras el anterior baja — cada tarjeta queda visible con su
+        // propio progreso, como en una cola. Una búsqueda de texto o una
+        // playlist sí reemplaza la lista (son "otra búsqueda").
+        if (results && results.length > 0 && !isPlaylist && !results.some((r) => r.id === hit.id)) {
+          downloadStore.setSession({ query: q, results: [...results, hit] });
+        } else {
+          downloadStore.setSession({ query: q, results: [hit] });
+        }
         void validateDownloaded();
         return;
       }
@@ -314,6 +332,9 @@ export default function SearchPage() {
     // pero el lote o un doble clic pueden llegar aquí): no lanzar otra copia.
     if (active[target.id] || active[hit.id]) return true;
     downloadStore.setActive(target.id);
+    // Reintentar: se limpia el fallo anterior y la fila vuelve a "Descargando…".
+    downloadStore.clearFailed(target.id);
+    if (hit.id !== target.id) downloadStore.clearFailed(hit.id);
     setError(null);
     if (!opts?.batch) setMessage(null);
     try {
@@ -351,7 +372,12 @@ export default function SearchPage() {
       }
       return true;
     } catch (err) {
-      if (!opts?.batch) setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      // Marcar los dos ids (versión Topic y fila original) como fallidas:
+      // el botón de la fila pasa a decir "Reintentar".
+      downloadStore.setFailed(target.id, message);
+      if (hit.id !== target.id) downloadStore.setFailed(hit.id, message);
+      if (!opts?.batch) setError(message);
       return false;
     } finally {
       downloadStore.unsetActive(target.id);
@@ -545,6 +571,19 @@ export default function SearchPage() {
             // resto conserva su botón normal y puede descargarse en paralelo.
             const batchSong = batchStatus[hit.id];
             const inBatch = batchSong !== undefined;
+            // Falló la descarga de esta fila: el botón pasa a "Reintentar".
+            const failedFor = failed[hit.id];
+            const retryButton = (
+              <Button
+                variant="secondary"
+                onClick={() => void handleDownload(hit)}
+                disabled={Boolean(active[hit.id])}
+                className="w-full text-accent"
+              >
+                <IconRefresh aria-hidden="true" size={16} stroke={1.75} />
+                Reintentar
+              </Button>
+            );
             // Ya la tienes: por el mapa de descargas o por la biblioteca.
             const inLibrary = isInLibrary(hit);
             return (
@@ -620,9 +659,7 @@ export default function SearchPage() {
                         Descargada
                       </span>
                     ) : batchSong === "error" ? (
-                      <span className="truncate text-center font-mono text-[11px] tabular-nums text-accent">
-                        Error
-                      </span>
+                      retryButton
                     ) : batchSong === "downloading" || isDownloading ? (
                       <>
                         <span className="truncate text-center font-mono text-[11px] tabular-nums text-accent">
@@ -664,6 +701,8 @@ export default function SearchPage() {
                         )}
                       </div>
                     </>
+                  ) : failedFor ? (
+                    retryButton
                   ) : inLibrary ? (
                     <Button variant="secondary" disabled className="w-full">
                       <IconCheck aria-hidden="true" size={16} stroke={1.75} className="text-accent" />

@@ -53,6 +53,8 @@ interface SearchState {
   /** Ids de las canciones descargándose AHORA mismo (pueden ser varias en
    * paralelo: buscas otra canción y le das a descargar sin esperar). */
   active: Record<string, true>;
+  /** Fallos: id → mensaje de error, para que el botón diga "Reintentar". */
+  failed: Record<string, string>;
   /** Lote de playlist en curso (null si no hay). */
   batch: DownloadBatch | null;
   /** Descargadas: id de vídeo → ruta absoluta del archivo en disco. */
@@ -94,6 +96,7 @@ function loadDownloaded(): Record<string, string> {
 let state: SearchState = {
   progress: {},
   active: {},
+  failed: {},
   batch: null,
   downloaded: loadDownloaded(),
   query: "",
@@ -157,6 +160,19 @@ export const downloadStore = {
     const next = { ...state.active };
     delete next[id];
     setPartial({ active: next });
+  },
+
+  /** Marca una descarga como fallida (el botón pasa a decir "Reintentar"). */
+  setFailed(id: string, message: string): void {
+    setPartial({ failed: { ...state.failed, [id]: message } });
+  },
+
+  /** Limpia el fallo (al reintentar o al descargar bien). */
+  clearFailed(id: string): void {
+    if (!state.failed[id]) return;
+    const next = { ...state.failed };
+    delete next[id];
+    setPartial({ failed: next });
   },
 
   /** Arranca un lote: todas las ids marcadas \"en cola\". */

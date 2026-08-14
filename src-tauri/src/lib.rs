@@ -1560,7 +1560,25 @@ fn resolve_spotify_sync(app: &tauri::AppHandle, spotify_id: &str) -> Result<Sear
     // coincidencia por palabras SOLO si el artista de YouTube coincide con
     // uno de los artistas de Spotify. Así una canción distinta con nombre
     // parecido ("2 Dangerous" → "Danger") nunca se cuela.
-    let artist_ok = artists_n.iter().any(|a| normalize(&hit.uploader).contains(a.as_str()));
+    //
+    // El artista se busca en el CANAL del vídeo y en los INTÉRPRETES reales
+    // de la API de YT Music (`hit.artists`, que ya vienen limpios, sin
+    // compositores): el canal a veces se acorta ("RUSHER" en vez de
+    // "Rusherking - Topic") y entonces solo los intérpretes lo confirman.
+    let artist_ok = artists_n.iter().any(|a| {
+        normalize(&hit.uploader).contains(a.as_str())
+            || hit.artists.iter().any(|artist| {
+                // Un intérprete compuesto ("A & B" o "A, B") cuenta si
+                // cualquiera de sus partes coincide con un artista de Spotify.
+                artist
+                    .split(['&', ','])
+                    .flat_map(|part| part.split(" y "))
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(normalize)
+                    .any(|part| part == *a || part.contains(a.as_str()))
+            })
+    });
     let dur_ok = target_sec == 0 || dur_diff <= 30;
     let accepted = dur_ok
         && ((title_rank == 0 && (artist_ok || dur_diff <= 10))
@@ -1570,10 +1588,25 @@ fn resolve_spotify_sync(app: &tauri::AppHandle, spotify_id: &str) -> Result<Sear
             "La canción en YouTube Music no coincide con la de Spotify (título, artista o duración distintos).".to_string(),
         );
     }
+    // El nombre que se muestra y se incrusta en el MP3 es el de YouTube
+    // Music (título EXACTO e intérpretes reales), igual que en una búsqueda
+    // normal — NO el de Spotify, que a veces difiere por un carácter ("feat"
+    // vs "con", tildes, mayúsculas…). En los hits de la pestaña de canciones
+    // el título ya viene limpio; en los de vídeos (visualizers) se quita el
+    // prefijo de artista y los marcadores de formato del canal.
+    let final_title = if hit.uploader.to_lowercase().contains("topic") || !hit.artists.is_empty() {
+        hit.title
+    } else {
+        strip_format_markers(&strip_leading_artist(&hit.title, &artists_n))
+    };
+    let final_artists = if hit.artists.is_empty() {
+        artists.iter().take(3).cloned().collect()
+    } else {
+        hit.artists
+    };
     Ok(SearchHit {
-        // Nombre canónico de Spotify (limpio, sin el artista pegado).
         id: hit.id,
-        title: name,
+        title: final_title,
         uploader: hit.uploader,
         duration_sec: hit.duration_sec,
         // La carátula del álbum de Spotify (o la miniatura del vídeo si no
@@ -1588,8 +1621,9 @@ fn resolve_spotify_sync(app: &tauri::AppHandle, spotify_id: &str) -> Result<Sear
         } else {
             Some(cover_url)
         },
-        // Intérpretes reales de Spotify (el embed solo lista performers).
-        artists: artists.iter().take(3).cloned().collect(),
+        // Intérpretes reales de YouTube Music; si la búsqueda de vídeos no
+        // los trae, los de Spotify (el embed solo lista performers).
+        artists: final_artists,
     })
 }
 
@@ -1910,7 +1944,54 @@ fn strip_artist_prefix(track_name: &str, artist_parts: &[String]) -> String {
     track_name.to_string()
 }
 
+/// ¿Es una frase de variante conocida ("remix", "live", "sped up"…)? Se
+/// usa para reconocer el sufijo " - Remix" de Spotify (sin paréntesis) y
+/// tratarlo como marcador, igual que "(Remix)" en YouTube Music.
+fn is_variant_phrase(phrase: &str) -> bool {
+    matches!(
+        phrase,
+        "remix"
+            | "rmx"
+            | "mix"
+            | "edit"
+            | "edits"
+            | "instrumental"
+            | "acapella"
+            | "live"
+            | "acoustic"
+            | "slowed"
+            | "sped up"
+            | "spedup"
+            | "sped-up"
+            | "extended"
+            | "extended mix"
+            | "radio edit"
+            | "original mix"
+            | "club mix"
+            | "dub mix"
+            | "original"
+    )
+}
+
 fn split_variant(title: &str) -> (String, Vec<String>) {
+    // Un sufijo " - Remix" (formato típico de Spotify, sin paréntesis) se
+    // normaliza a "(Remix)": así "Además de Mí - Remix" y "Además de Mí
+    // (Remix)" quedan con la MISMA base y el mismo marcador, y el match
+    // entre fuentes no se pierde por el formato del separador.
+    let title = match title.rsplit_once(" - ") {
+        Some((left, right)) => {
+            let collapsed: String = right.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !right.contains(['(', '['])
+                && !collapsed.is_empty()
+                && is_variant_phrase(&collapsed.to_lowercase())
+            {
+                format!("{left} ({right})")
+            } else {
+                title.to_string()
+            }
+        }
+        None => title.to_string(),
+    };
     let mut base = String::new();
     let mut markers: Vec<String> = Vec::new();
     let mut depth = 0usize;
@@ -3721,22 +3802,16 @@ fn friendly_ytdlp_error(stderr: &str) -> String {
     if lower.contains("http error 403") || lower.contains("http error 429") {
         format!(
             concat!(
-                "YouTube bloqueó la descarga de este vídeo (HTTP 403/429: Forbidden).\n",
-                "Suele ser un bloqueo temporal por demasiadas peticiones seguidas o por un\n",
-                "yt-dlp desactualizado (YouTube cambia su sistema anti-bot con frecuencia).\n",
-                "La app ya reintentó y actualizó yt-dlp automáticamente. Espera un par de\n",
-                "minutos y vuelve a intentarlo; si el problema persiste, reinicia la app.\n\n",
-                "Detalle técnico:\n{}",
+                "YouTube bloqueó la descarga (403/429). Espera un momento y reintenta.\n",
+                "Detalle: {}",
             ),
             trimmed
         )
     } else if lower.contains("unable to download video data") {
         format!(
             concat!(
-                "YouTube no entregó el audio de este vídeo: bloqueo temporal, vídeo\n",
-                "restringido o no disponible en tu región. La app ya reintentó y actualizó\n",
-                "yt-dlp automáticamente; si persiste, espera unos minutos y vuelve a probar.\n\n",
-                "Detalle técnico:\n{}",
+                "YouTube no entregó el audio de este vídeo. Espera un momento y reintenta.\n",
+                "Detalle: {}",
             ),
             trimmed
         )
@@ -4426,6 +4501,25 @@ mod variant_title_tests {
         // Un marcador de una sola palabra sigue igual (remix, paused…).
         let (_, remix) = split_variant("Calma (Remix)");
         assert_eq!(remix, vec!["remix".to_string()]);
+
+        // Sufijo " - Remix" al estilo Spotify (sin paréntesis): debe dar la
+        // MISMA base y marcador que "(Remix)" para que el match entre
+        // fuentes no se pierda por el formato del separador.
+        let (base, markers) = split_variant("Además de Mí - Remix");
+        assert_eq!(base, "ademasdemi");
+        assert_eq!(markers, vec!["remix".to_string()]);
+        let (base_paren, markers_paren) = split_variant("Además de Mí (Remix)");
+        assert_eq!(base_paren, base);
+        assert_eq!(markers_paren, markers);
+        // " - " con un sufijo que NO es variante no se toca (p. ej. un
+        // título compuesto; el guion se conserva en la base como siempre).
+        let (base2, markers2) = split_variant("Uno - Dos");
+        assert!(markers2.is_empty());
+        assert_eq!(base2, "uno-dos");
+        // Paréntesis + sufijo: la base es la de los paréntesis y "live"
+        // entra como marcador extra.
+        let (base3, _) = split_variant("Canción (Remix) - Live");
+        assert_eq!(base3, "cancion");
     }
 
     #[test]
@@ -4844,12 +4938,10 @@ mod ytdlp_update_tests {
     #[test]
     fn friendly_error_explains_403_with_technical_detail() {
         let msg = friendly_ytdlp_error("ERROR: unable to download video data: HTTP Error 403: Forbidden");
-        assert!(msg.contains("HTTP 403/429"));
-        assert!(msg.contains("yt-dlp"));
-        assert!(msg.contains("Detalle técnico"));
+        assert!(msg.contains("403/429"));
+        assert!(msg.contains("reintenta"));
+        assert!(msg.contains("Detalle:"));
         assert!(msg.contains("HTTP Error 403: Forbidden"));
-        // Sin indentación heredada de la fuente.
-        assert!(!msg.contains("\n            "));
     }
 
     #[test]

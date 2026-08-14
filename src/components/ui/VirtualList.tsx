@@ -71,12 +71,16 @@ export function VirtualList<T>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Nueva búsqueda: volver arriba para ver los primeros resultados.
+  // Nueva búsqueda: volver arriba para ver los primeros resultados. Solo
+  // cuando cambia la PRIMERA fila (la lista se reemplazó): si solo se
+  // añadieron filas nuevas (p. ej. enlaces pegados que se acumulan), el
+  // scroll se queda donde está y la tarjeta nueva queda visible.
+  const firstItemKey = items.length > 0 ? String(getKey?.(items[0], 0) ?? 0) : "";
   useLayoutEffect(() => {
     if (!resetOnItemsChange) return;
     const container = containerRef.current;
     if (container) container.scrollTop = 0;
-  }, [items, resetOnItemsChange]);
+  }, [firstItemKey, resetOnItemsChange]);
 
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
   const end = Math.min(
