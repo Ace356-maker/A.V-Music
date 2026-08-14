@@ -40,15 +40,19 @@ export interface DownloadProgress {
 
 export interface DownloadBatch {
   total: number;
+  /** Listas completadas ("done"). */
   done: number;
+  /** Descargas en vuelo ahora mismo (paralelas). */
+  active: number;
   status: Record<string, BatchSongStatus>;
 }
 
 interface SearchState {
   /** Por URL de vídeo → progreso en vivo (yt-dlp). */
   progress: Record<string, DownloadProgress>;
-  /** Id del hit que se está descargando ahora mismo. */
-  downloading: string | null;
+  /** Ids de las canciones descargándose AHORA mismo (pueden ser varias en
+   * paralelo: buscas otra canción y le das a descargar sin esperar). */
+  active: Record<string, true>;
   /** Lote de playlist en curso (null si no hay). */
   batch: DownloadBatch | null;
   /** Descargadas: id de vídeo → ruta absoluta del archivo en disco. */
@@ -89,7 +93,7 @@ function loadDownloaded(): Record<string, string> {
 
 let state: SearchState = {
   progress: {},
-  downloading: null,
+  active: {},
   batch: null,
   downloaded: loadDownloaded(),
   query: "",
@@ -142,34 +146,49 @@ export const downloadStore = {
     return state;
   },
 
-  setDownloading(id: string | null): void {
-    setPartial({ downloading: id });
+  /** Marca una canción como descargándose (se suman las que estén en curso). */
+  setActive(id: string): void {
+    setPartial({ active: { ...state.active, [id]: true } });
+  },
+
+  /** Quita la canción de las que se están descargando (terminó o falló). */
+  unsetActive(id: string): void {
+    if (!state.active[id]) return;
+    const next = { ...state.active };
+    delete next[id];
+    setPartial({ active: next });
   },
 
   /** Arranca un lote: todas las ids marcadas \"en cola\". */
   startBatch(total: number, ids: string[]): void {
     const status: Record<string, BatchSongStatus> = {};
     for (const id of ids) status[id] = "queued";
-    setPartial({ batch: { total, done: 0, status } });
+    setPartial({ batch: { total, done: 0, active: 0, status } });
   },
 
-  /** Marca la canción en curso como \"descargando\" y actualiza el contador. */
-  setBatchDownloading(id: string, done: number): void {
+  /** Marca la canción como \"descargando\" y suma una en vuelo. */
+  setBatchDownloading(id: string): void {
     if (!state.batch) return;
     setPartial({
       batch: {
         ...state.batch,
-        done,
+        active: state.batch.active + 1,
         status: { ...state.batch.status, [id]: "downloading" },
       },
     });
   },
 
-  /** Marca el resultado de una canción del lote (\"done\" o \"error\"). */
-  setBatchResult(id: string, status: BatchSongStatus): void {
+  /** Marca el resultado de una canción del lote (\"done\" o \"error\"):
+   * resta una en vuelo y suma una a las listas si terminó bien. */
+  setBatchResult(id: string, status: "done" | "error"): void {
     if (!state.batch) return;
     setPartial({
-      batch: { ...state.batch, status: { ...state.batch.status, [id]: status } },
+      batch: {
+        ...state.batch,
+        active: Math.max(0, state.batch.active - 1),
+        done: state.batch.done + (status === "done" ? 1 : 0),
+        status: { ...state.batch.status, [id]: status },
+      },
     });
   },
 

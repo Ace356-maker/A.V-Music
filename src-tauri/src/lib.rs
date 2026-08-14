@@ -66,6 +66,10 @@ struct PlaylistResult {
     hits: Vec<SearchHit>,
 }
 
+/// Candado para la resolución/descarga de ffmpeg: con varias descargas en
+/// paralelo (primera vez) solo una baja el binario y las demás esperan.
+static FFMPEG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 const AUDIO_EXTENSIONS: [&str; 7] = ["mp3", "flac", "wav", "ogg", "m4a", "aac", "opus"];
 
 /// Extensiones de audio que yt-dlp puede entregar para `bestaudio` (webm =
@@ -89,29 +93,17 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     cmd
 }
 
-/// Resuelve el binario de yt-dlp: primero el del PATH; si no está, el que ya
-/// descargamos en el directorio de datos de la app; si tampoco existe, lo
-/// descarga con curl (incluido en Windows 10+, macOS y la mayoría de Linux).
-fn resolve_ytdlp(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    if let Ok(output) = command("yt-dlp").arg("--version").output() {
-        if output.status.success() {
-            return Ok(std::path::PathBuf::from("yt-dlp"));
-        }
-    }
-
-    let data_dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
-    std::fs::create_dir_all(&data_dir).map_err(|err| err.to_string())?;
+/// Descarga el yt-dlp MÁS RECIENTE de GitHub al directorio de datos,
+/// sobrescribiendo el que haya (se usa tanto para la primera instalación
+/// como para refrescar un binario viejo tras un bloqueo de YouTube).
+fn download_latest_ytdlp(data_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(data_dir).map_err(|err| err.to_string())?;
     let exe_name = if cfg!(windows) {
         "yt-dlp.exe"
     } else {
         "yt-dlp"
     };
     let local = data_dir.join(exe_name);
-
-    if local.exists() {
-        return Ok(local);
-    }
-
     let url = format!("https://github.com/yt-dlp/yt-dlp/releases/latest/download/{exe_name}");
     let status = command("curl")
         .args(["-L", "--fail", "--silent", "--show-error", "--max-time", "120", "-o"])
@@ -142,6 +134,106 @@ fn resolve_ytdlp(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     }
 
     Ok(local)
+}
+
+/// Resuelve el binario de yt-dlp: primero el del PATH; si no está, el que ya
+/// descargamos en el directorio de datos de la app; si tampoco existe, lo
+/// descarga con curl (incluido en Windows 10+, macOS y la mayoría de Linux).
+fn resolve_ytdlp(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    if let Ok(output) = command("yt-dlp").arg("--version").output() {
+        if output.status.success() {
+            return Ok(std::path::PathBuf::from("yt-dlp"));
+        }
+    }
+
+    let data_dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
+    let local = data_dir.join(if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    });
+    if local.exists() {
+        return Ok(local);
+    }
+    download_latest_ytdlp(&data_dir)
+}
+
+/// Reemplaza el yt-dlp local por la última versión de GitHub (para salir de
+/// un bloqueo de YouTube por binario desactualizado). Si el usuario tiene
+/// yt-dlp en el PATH no se toca: es suyo y la app no debe meterse con
+/// archivos del sistema.
+fn force_update_ytdlp(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    if let Ok(output) = command("yt-dlp").arg("--version").output() {
+        if output.status.success() {
+            return Ok(std::path::PathBuf::from("yt-dlp"));
+        }
+    }
+    let data_dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
+    download_latest_ytdlp(&data_dir)
+}
+
+/// Versión que reporta un binario de yt-dlp con `--version` ("2026.07.04").
+fn binary_version(bin: &std::path::Path) -> Option<String> {
+    let output = command(bin).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Extrae el tag de la última release de las cabeceras de GitHub
+/// (".../releases/tag/2026.07.04").
+fn parse_latest_tag(headers: &str) -> Option<String> {
+    let marker = "/releases/tag/";
+    let pos = headers.find(marker)?;
+    let rest = &headers[pos + marker.len()..];
+    let tag = rest.split(['"', '\r', '\n', '<', '>', ' ']).next()?;
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.to_string())
+    }
+}
+
+/// Última versión publicada de yt-dlp, leída de la redirección de
+/// "releases/latest" de GitHub (sin tocar la API, que tiene límite de
+/// peticiones por IP). Devuelve el tag ("2026.08.01") o `None` si falla.
+fn latest_ytdlp_version() -> Option<String> {
+    let output = command("curl")
+        .args([
+            "-s",
+            "-I",
+            "-L",
+            "--max-time",
+            "15",
+            "https://github.com/yt-dlp/yt-dlp/releases/latest",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_latest_tag(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Mantiene yt-dlp al día en segundo plano: YouTube cambia su sistema
+/// anti-bot con frecuencia y un binario viejo es la causa #1 de los errores
+/// 403 al descargar. Si algo falla (sin red, límites…) se ignora: la propia
+/// descarga reintentará con el binario refrescado si hace falta.
+fn auto_update_ytdlp(app: &tauri::AppHandle) {
+    // Un yt-dlp en el PATH es del usuario: no lo gestionamos.
+    if let Ok(output) = command("yt-dlp").arg("--version").output() {
+        if output.status.success() {
+            return;
+        }
+    }
+    let Ok(local) = resolve_ytdlp(app) else { return };
+    let Some(local_version) = binary_version(&local) else { return };
+    let Some(latest_version) = latest_ytdlp_version() else { return };
+    if latest_version == local_version {
+        return;
+    }
+    let _ = force_update_ytdlp(app);
 }
 
 /// Resuelve deno (necesario para que yt-dlp extraiga de YouTube en las
@@ -3485,13 +3577,16 @@ fn find_stem_file(dir: &std::path::Path, stem: &str) -> Option<std::path::PathBu
     None
 }
 
-/// Borra los temporales del audio crudo (`av_raw.*`, `.part`, `.ytdl`) tras
-/// un intento fallido, para que no queden archivos raros en la carpeta de
-/// descargas que nunca llegan a convertirse en MP3.
-fn cleanup_raw_attempt(base: &std::path::Path) {
+/// Borra los temporales del audio crudo DE ESTA descarga (`av_raw_{stem}.*`,
+/// `.part`, `.ytdl`) tras un intento fallido, para que no queden archivos
+/// raros en la carpeta de descargas que nunca llegan a convertirse en MP3.
+/// Nunca toca los temporales de otra descarga en curso (cada una usa un
+/// sufijo único): solo además las sobras del formato viejo sin sufijo.
+fn cleanup_raw_attempt(base: &std::path::Path, stem: &str) {
     let Ok(entries) = std::fs::read_dir(base) else {
         return;
     };
+    let prefix = format!("av_raw_{stem}");
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -3501,7 +3596,7 @@ fn cleanup_raw_attempt(base: &std::path::Path) {
             .file_name()
             .map(|name| name.to_string_lossy().to_lowercase())
             .unwrap_or_default();
-        if lower.starts_with("av_raw") || lower.ends_with(".part") || lower.ends_with(".ytdl") {
+        if lower.starts_with(&prefix) || lower.starts_with("av_raw.") {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -3527,11 +3622,12 @@ fn convert_to_mp3(
 }
 
 /// Baja una carátula desde una URL directa (p. ej. la portada del álbum de
-/// Spotify) a `av_thumb.jpg` en la carpeta de descargas. Devuelve la ruta
-/// si la descarga llegó bien; si no, `None` (y se cae a la miniatura del
-/// vídeo).
-fn download_cover_url(url: &str, dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let out = dir.join("av_thumb.jpg");
+/// Spotify) a `av_thumb_{stem}.jpg` en la carpeta de descargas. El sufijo
+/// único por URL evita que dos descargas en paralelo se pisen la miniatura.
+/// Devuelve la ruta si la descarga llegó bien; si no, `None` (y se cae a la
+/// miniatura del vídeo).
+fn download_cover_url(url: &str, dir: &std::path::Path, stem: &str) -> Option<std::path::PathBuf> {
+    let out = dir.join(format!("av_thumb_{stem}.jpg"));
     let status = command("curl")
         .args([
             "-s",
@@ -3555,13 +3651,15 @@ fn download_cover_url(url: &str, dir: &std::path::Path) -> Option<std::path::Pat
 }
 
 /// Baja la miniatura del vídeo (para vídeos Topic es la portada oficial del
-/// álbum) en un paso aparte, sin tocar el flujo de descarga del audio.
+/// álbum) en un paso aparte, sin tocar el flujo de descarga del audio. El
+/// sufijo único por URL evita colisiones entre descargas en paralelo.
 fn fetch_thumbnail(
     app: &tauri::AppHandle,
     url: &str,
     dir: &std::path::Path,
+    stem: &str,
 ) -> Option<std::path::PathBuf> {
-    let template = format!("{}/av_thumb.%(ext)s", dir.display());
+    let template = format!("{}/av_thumb_{stem}.%(ext)s", dir.display());
     let output = ytdlp(
         app,
         &[
@@ -3578,7 +3676,7 @@ fn fetch_thumbnail(
     if !output.status.success() {
         return None;
     }
-    find_stem_file(dir, "av_thumb")
+    find_stem_file(dir, &format!("av_thumb_{stem}"))
 }
 
 /// Borra sobras de la canción conservando el archivo final: al terminar una
@@ -3613,6 +3711,60 @@ fn cleanup_leftovers(file_path: &std::path::Path) {
     }
 }
 
+/// Convierte el stderr crudo de yt-dlp en un mensaje claro para la UI:
+/// explica qué pasó y qué hizo la app (reintentos + actualización de
+/// yt-dlp) sin perder el detalle técnico. Los errores que no son bloqueos
+/// de YouTube se devuelven tal cual.
+fn friendly_ytdlp_error(stderr: &str) -> String {
+    let lower = stderr.to_lowercase();
+    let trimmed = stderr.trim();
+    if lower.contains("http error 403") || lower.contains("http error 429") {
+        format!(
+            concat!(
+                "YouTube bloqueó la descarga de este vídeo (HTTP 403/429: Forbidden).\n",
+                "Suele ser un bloqueo temporal por demasiadas peticiones seguidas o por un\n",
+                "yt-dlp desactualizado (YouTube cambia su sistema anti-bot con frecuencia).\n",
+                "La app ya reintentó y actualizó yt-dlp automáticamente. Espera un par de\n",
+                "minutos y vuelve a intentarlo; si el problema persiste, reinicia la app.\n\n",
+                "Detalle técnico:\n{}",
+            ),
+            trimmed
+        )
+    } else if lower.contains("unable to download video data") {
+        format!(
+            concat!(
+                "YouTube no entregó el audio de este vídeo: bloqueo temporal, vídeo\n",
+                "restringido o no disponible en tu región. La app ya reintentó y actualizó\n",
+                "yt-dlp automáticamente; si persiste, espera unos minutos y vuelve a probar.\n\n",
+                "Detalle técnico:\n{}",
+            ),
+            trimmed
+        )
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Sufijo único y seguro para los archivos temporales de una descarga: el
+/// id del vídeo ("av_raw_E9AbE8AqplU") o, si no se puede extraer, un hash
+/// corto de la URL. Varias descargas en paralelo a la misma carpeta así no
+/// se pisan los `av_raw.*` / `av_thumb.*` ni se borran los temporales ajenos.
+fn unique_stem(url: &str) -> String {
+    if let Some(id) = extract_video_id(url) {
+        let safe: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if safe.len() >= 6 {
+            return safe;
+        }
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 fn download_sync(
     app: &tauri::AppHandle,
     url: &str,
@@ -3629,9 +3781,17 @@ fn download_sync(
     });
     std::fs::create_dir_all(&base).map_err(|err| err.to_string())?;
 
-    // Barrido previo: sobras de descargas anteriores (intentos a medio
-    // hacer, miniaturas, temporales y `.lrc` viejos) para que nunca queden
-    // archivos sueltos junto al MP3 final.
+    // Sufijo único por URL: los temporales de esta descarga (`av_raw_{stem}`,
+    // `av_thumb_{stem}`) jamás chocan con los de otra descarga en paralelo.
+    let stem = unique_stem(url);
+    let raw_prefix = format!("av_raw_{stem}");
+    let thumb_prefix = format!("av_thumb_{stem}");
+
+    // Barrido previo: sobras de ESTA canción (intentos a medio hacer,
+    // miniaturas y `.lrc` viejos) para que nunca queden archivos sueltos
+    // junto al MP3 final. Solo toca los temporales con nuestro sufijo — y
+    // las sobras del formato viejo sin sufijo (`av_raw.…`) — nunca los de
+    // otra descarga que esté en curso.
     let title_lrc = base.join(format!("{}.lrc", sanitize_filename(title)));
     if let Ok(entries) = std::fs::read_dir(&base) {
         for entry in entries.flatten() {
@@ -3647,11 +3807,10 @@ fn download_sync(
                 .file_name()
                 .map(|name| name.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
-            if lower.starts_with("av_raw")
-                || lower.starts_with("av_thumb")
-                || lower.ends_with(".tmp.mp3")
-                || lower.ends_with(".part")
-                || lower.ends_with(".ytdl")
+            if lower.starts_with(&raw_prefix)
+                || lower.starts_with(&thumb_prefix)
+                || lower.starts_with("av_raw.")
+                || lower.starts_with("av_thumb.")
             {
                 let _ = std::fs::remove_file(&path);
             }
@@ -3671,7 +3830,13 @@ fn download_sync(
             },
         );
     }
-    let (ffmpeg_bin, mut note): (Option<std::path::PathBuf>, Option<String>) =
+    // Varias descargas en paralelo pueden arrancar a la vez la primera vez:
+    // el candado hace que solo una baje/extraiga ffmpeg y las demás esperen
+    // a encontrarlo ya listo en la carpeta de datos.
+    let (ffmpeg_bin, mut note): (Option<std::path::PathBuf>, Option<String>) = {
+        let _guard = FFMPEG_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match resolve_ffmpeg(app) {
             Ok(Some(bin)) => (Some(bin), None),
             Ok(None) => (
@@ -3679,12 +3844,14 @@ fn download_sync(
                 Some("Sin ffmpeg en esta plataforma: audio nativo, no MP3".into()),
             ),
             Err(reason) => (None, Some(reason)),
-        };
+        }
+    };
     let has_ffmpeg = ffmpeg_bin.is_some();
 
     // 1) Audio crudo (mejor formato), sin conversión en yt-dlp: sin archivos
-    //    intermedios raros y sin depender de `-x` + `--ffmpeg-location`.
-    let raw_template = format!("{}/av_raw.%(ext)s", base.display());
+    //    intermedios raros y sin depender de `-x` + `--ffmpeg-location`. El
+    //    sufijo único por URL permite descargas en paralelo sin pisarse.
+    let raw_template = format!("{}/av_raw_{stem}.%(ext)s", base.display());
     let raw_args: Vec<String> = vec![
         "--newline".into(),
         "--progress".into(),
@@ -3712,19 +3879,30 @@ fn download_sync(
             || lower.contains("unable to download video data")
             || lower.contains("temporarily unavailable")
     };
-    // El bucle rompe con éxito o devuelve Err en cualquier fallo (el último
-    // intento nunca se reintenta): solo se llega al resto del flujo con la
-    // descarga completa.
+    // Bloqueo de YouTube (403/429) = candidato a binario desactualizado: si
+    // los reintentos no bastan, se refresca yt-dlp y se intenta una vez más
+    // con la última versión antes de rendirse.
+    let is_youtube_block = |stderr: &str| {
+        let lower = stderr.to_lowercase();
+        lower.contains("http error 403")
+            || lower.contains("http error 429")
+            || lower.contains("unable to download video data")
+    };
+    // El bucle rompe con éxito o agotando los reintentos; el error queda en
+    // `last_stderr` para decidir después si conviene refrescar yt-dlp.
+    let mut ok = false;
+    let mut last_stderr = String::new();
     for attempt in 0..RAW_ATTEMPTS {
-        cleanup_raw_attempt(&base);
+        cleanup_raw_attempt(&base, &stem);
         match run_with_progress(app, &raw_args, url) {
-            Ok(out) if out.status.success() => break,
+            Ok(out) if out.status.success() => {
+                ok = true;
+                break;
+            }
             Ok(out) => {
-                let stderr = decode_ytdlp(&out.stderr);
-                let last = attempt + 1 == RAW_ATTEMPTS;
-                if last || !is_transient_error(&stderr) {
-                    cleanup_raw_attempt(&base);
-                    return Err(stderr.trim().to_string());
+                last_stderr = decode_ytdlp(&out.stderr);
+                if attempt + 1 == RAW_ATTEMPTS || !is_transient_error(&last_stderr) {
+                    break;
                 }
                 // Espera creciente entre intentos (2 s, 4 s…): le da tiempo
                 // al bloqueo de YouTube a soltarse. La UI muestra un estado
@@ -3744,13 +3922,48 @@ fn download_sync(
             Err(err) => {
                 // No se pudo lanzar o leer yt-dlp: no es un bloqueo de
                 // YouTube, se devuelve directo (limpiando lo que haya).
-                cleanup_raw_attempt(&base);
+                cleanup_raw_attempt(&base, &stem);
                 return Err(err);
             }
         }
     }
-    let raw_path = find_stem_file(&base, "av_raw").ok_or_else(|| {
-        cleanup_raw_attempt(&base);
+    // 403/429 persistente: la causa #1 es un yt-dlp desactualizado (YouTube
+    // cambia su API de reproducción y los binarios viejos quedan bloqueados).
+    // Se baja la última versión y se intenta UNA vez más con el binario nuevo.
+    if !ok && is_youtube_block(&last_stderr) {
+        let _ = app.emit(
+            "download-progress",
+            ProgressPayload {
+                url: url.to_string(),
+                percent: -1.0,
+                speed: Some("Actualizando yt-dlp…".into()),
+            },
+        );
+        match force_update_ytdlp(app) {
+            Ok(_) => {
+                cleanup_raw_attempt(&base, &stem);
+                match run_with_progress(app, &raw_args, url) {
+                    Ok(out) if out.status.success() => ok = true,
+                    Ok(out) => last_stderr = decode_ytdlp(&out.stderr),
+                    Err(err) => {
+                        cleanup_raw_attempt(&base, &stem);
+                        return Err(err);
+                    }
+                }
+            }
+            Err(update_err) => {
+                last_stderr = format!(
+                    "{last_stderr}\nNo se pudo actualizar yt-dlp automáticamente: {update_err}"
+                );
+            }
+        }
+    }
+    if !ok {
+        cleanup_raw_attempt(&base, &stem);
+        return Err(friendly_ytdlp_error(&last_stderr));
+    }
+    let raw_path = find_stem_file(&base, &format!("av_raw_{stem}")).ok_or_else(|| {
+        cleanup_raw_attempt(&base, &stem);
         "No se pudo determinar el archivo de audio descargado.".to_string()
     })?;
 
@@ -3764,7 +3977,7 @@ fn download_sync(
         .map(|ext| RAW_AUDIO_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
         .unwrap_or(false);
     if !raw_ext_ok {
-        cleanup_raw_attempt(&base);
+        cleanup_raw_attempt(&base, &stem);
         return Err(
             "yt-dlp no descargó un archivo de audio válido para esta canción.".to_string(),
         );
@@ -3857,6 +4070,7 @@ fn download_sync(
     let title_lyrics = title.to_string();
     let url_owned = url.to_string();
     let base_thumb = base.clone();
+    let stem_thumb = stem.clone();
     let cover_owned = cover_url.map(str::to_string);
     let app_thumb = app.clone();
 
@@ -3898,8 +4112,10 @@ fn download_sync(
     let thumb_thread = if has_ffmpeg && is_mp3 {
         Some(std::thread::spawn(move || {
             let result = match cover_owned {
-                Some(cover) if !cover.trim().is_empty() => download_cover_url(&cover, &base_thumb),
-                _ => fetch_thumbnail(&app_thumb, &url_owned, &base_thumb),
+                Some(cover) if !cover.trim().is_empty() => {
+                    download_cover_url(&cover, &base_thumb, &stem_thumb)
+                }
+                _ => fetch_thumbnail(&app_thumb, &url_owned, &base_thumb, &stem_thumb),
             };
             let _ = thumb_tx.send(result);
         }))
@@ -4147,6 +4363,14 @@ pub fn run() {
         // app tras instalar la actualización).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            // yt-dlp se mantiene solo en segundo plano al arrancar: YouTube
+            // actualiza su sistema anti-bot seguido y un binario viejo es la
+            // causa #1 de los errores 403 al descargar.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || auto_update_ytdlp(&handle));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             pick_folder,
@@ -4597,5 +4821,58 @@ mod variant_title_tests {
             hits[0].artists,
             vec!["Fuego".to_string(), "Manuel Turizo".to_string(), "Duki".to_string()]
         );
+    }
+}
+
+/// Pruebas de la auto-actualización de yt-dlp (parseo de la última versión
+/// y del mensaje amigable de error 403/429).
+#[cfg(test)]
+mod ytdlp_update_tests {
+    use super::*;
+
+    #[test]
+    fn parse_latest_tag_from_location_header() {
+        let headers = "HTTP/2 302\r\nlocation: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.01\r\n\r\n";
+        assert_eq!(parse_latest_tag(headers), Some("2026.08.01".to_string()));
+        // Con mayúsculas en "Location" y una redirección intermedia.
+        let headers = "HTTP/2 302\r\nLocation: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.07.04\r\n\r\nHTTP/2 200\r\n";
+        assert_eq!(parse_latest_tag(headers), Some("2026.07.04".to_string()));
+        // Sin tag: None.
+        assert_eq!(parse_latest_tag("HTTP/2 404\r\n"), None);
+    }
+
+    #[test]
+    fn friendly_error_explains_403_with_technical_detail() {
+        let msg = friendly_ytdlp_error("ERROR: unable to download video data: HTTP Error 403: Forbidden");
+        assert!(msg.contains("HTTP 403/429"));
+        assert!(msg.contains("yt-dlp"));
+        assert!(msg.contains("Detalle técnico"));
+        assert!(msg.contains("HTTP Error 403: Forbidden"));
+        // Sin indentación heredada de la fuente.
+        assert!(!msg.contains("\n            "));
+    }
+
+    #[test]
+    fn friendly_error_passes_through_unrelated_errors() {
+        let err = "ERROR: This video is not available";
+        assert_eq!(friendly_ytdlp_error(err), err);
+    }
+
+    #[test]
+    fn unique_stem_uses_video_id_and_is_distinct_per_url() {
+        // Enlaces de YT/YT Music: el sufijo es el id del vídeo (seguro para
+        // nombres de archivo y único entre descargas paralelas).
+        assert_eq!(
+            unique_stem("https://music.youtube.com/watch?v=WVZ6r-ld52k"),
+            "WVZ6r-ld52k"
+        );
+        assert_eq!(unique_stem("https://youtu.be/1NMHaoQHAmI"), "1NMHaoQHAmI");
+        // Sin id extraíble: un hash corto, distinto para cada URL.
+        let a = unique_stem("https://example.com/cancion-uno");
+        let b = unique_stem("https://example.com/cancion-dos");
+        assert_eq!(a.len(), 16);
+        assert_ne!(a, b);
+        // Estable para la misma URL (no cambia entre intentos).
+        assert_eq!(a, unique_stem("https://example.com/cancion-uno"));
     }
 }

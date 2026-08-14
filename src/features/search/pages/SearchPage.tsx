@@ -165,7 +165,7 @@ export default function SearchPage() {
   // al cambio de vista (query, resultados, selección, progreso, lote y
   // descargadas se conservan al volver a Buscar).
   const downloads = useDownloads();
-  const { progress, downloading, downloaded, query, results, isPlaylist, selected } = downloads;
+  const { progress, active, downloaded, query, results, isPlaylist, selected } = downloads;
   const batchProgress = downloads.batch;
   const batchStatus = batchProgress ? batchProgress.status : {};
 
@@ -297,8 +297,9 @@ export default function SearchPage() {
 
   /**
    * Descarga una canción. Devuelve true si tuvo éxito (para el lote de
-   * playlist). En modo lote no pisa el mensaje con el resumen final: el
-   * error sí se muestra, para saber cuál falló.
+   * playlist). Varias descargas pueden correr en paralelo: cada fila lleva
+   * su propio estado y progreso sin tocar las demás. En modo lote no pisa
+   * el mensaje con el resumen final: el error sí se muestra.
    */
   async function handleDownload(hit: SearchHit, opts?: { batch?: boolean }): Promise<boolean> {
     // Preferir la versión Topic (audio puro con la carátula del álbum) si
@@ -309,7 +310,10 @@ export default function SearchPage() {
           result.uploader.toLowerCase().includes("topic") &&
           normalize(result.title) === normalize(hit.title),
       ) ?? hit;
-    downloadStore.setDownloading(target.id);
+    // Ya se está descargando esta canción (el botón de su fila lo bloquea,
+    // pero el lote o un doble clic pueden llegar aquí): no lanzar otra copia.
+    if (active[target.id] || active[hit.id]) return true;
+    downloadStore.setActive(target.id);
     setError(null);
     if (!opts?.batch) setMessage(null);
     try {
@@ -350,14 +354,10 @@ export default function SearchPage() {
       if (!opts?.batch) setError(err instanceof Error ? err.message : String(err));
       return false;
     } finally {
-      downloadStore.setDownloading(null);
+      downloadStore.unsetActive(target.id);
     }
   }
 
-  /**
-   * Descarga toda la playlist, una canción tras otra (yt-dlp procesa de a
-   * una). Salta las que ya están descargadas y resume al final.
-   */
   function toggleSelected(id: string): void {
     const next = new Set(selected);
     if (next.has(id)) {
@@ -380,6 +380,14 @@ export default function SearchPage() {
   /** Canción que el lote está descargando ahora mismo (para el encabezado). */
   const batchSongNow = results?.find((hit) => batchStatus[hit.id] === "downloading") ?? null;
 
+  /**
+   * Descarga la playlist seleccionada con varias en paralelo (hasta
+   * BATCH_CONCURRENCY a la vez): cada fila muestra su etapa (en cola →
+   * descargando con % → descargada ✓ / error) y el encabezado, el avance.
+   * Salta las que ya están descargadas y resume al final.
+   */
+  const BATCH_CONCURRENCY = 3;
+
   async function handleDownloadAll(): Promise<void> {
     if (!results || batchProgress) return;
     const pending = results.filter(
@@ -392,17 +400,28 @@ export default function SearchPage() {
     setMessage(null);
     downloadStore.startBatch(pending.length, pending.map((hit) => hit.id));
     let ok = 0;
-    for (let index = 0; index < pending.length; index += 1) {
-      const hit = pending[index];
-      downloadStore.setBatchDownloading(hit.id, index);
-      const success = await handleDownload(hit, { batch: true });
-      if (success) {
-        ok += 1;
-        downloadStore.setBatchResult(hit.id, "done");
-      } else {
-        downloadStore.setBatchResult(hit.id, "error");
+    let nextIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (nextIndex < pending.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const hit = pending[index];
+        downloadStore.setBatchDownloading(hit.id);
+        const success = await handleDownload(hit, { batch: true });
+        if (success) {
+          ok += 1;
+          downloadStore.setBatchResult(hit.id, "done");
+        } else {
+          downloadStore.setBatchResult(hit.id, "error");
+        }
       }
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(BATCH_CONCURRENCY, pending.length) },
+        () => worker(),
+      ),
+    );
     downloadStore.endBatch();
     setMessage(
       ok === pending.length
@@ -488,7 +507,10 @@ export default function SearchPage() {
             </button>
             <p className="truncate text-sm text-muted">
               {batchProgress
-                ? `Descargando ${Math.min(batchProgress.done + 1, batchProgress.total)} de ${batchProgress.total}${
+                ? `Descargando ${Math.min(
+                    batchProgress.done + batchProgress.active,
+                    batchProgress.total,
+                  )} de ${batchProgress.total} en paralelo${
                     batchSongNow ? ` · ${batchSongNow.title}` : ""
                   }…`
                 : `${selectedCount} de ${results.length} canciones seleccionadas`}
@@ -496,7 +518,7 @@ export default function SearchPage() {
           </div>
           <Button
             onClick={() => void handleDownloadAll()}
-            disabled={downloading !== null || batchProgress !== null || selectedCount === 0}
+            disabled={batchProgress !== null || selectedCount === 0}
             className="shrink-0"
           >
             <IconDownload aria-hidden="true" size={16} stroke={1.75} />
@@ -514,13 +536,15 @@ export default function SearchPage() {
           className="min-h-0 flex-1 overflow-y-auto rounded-sm"
           renderItem={(hit) => {
             const url = downloadUrlFor(hit);
-            const isDownloading = downloading === hit.id;
+            const isDownloading = Boolean(active[hit.id]);
             const current = progress[url];
             const badge = variantLabel(hit.title);
             // En un lote, cada fila muestra su propio estado (en cola →
-            // descargando → descargada ✓ / error) además del % en vivo.
-            const inBatch = batchProgress !== null;
+            // descargando → descargada ✓ / error) además del % en vivo. La
+            // fila está "en lote" solo si esa canción pertenece al lote: el
+            // resto conserva su botón normal y puede descargarse en paralelo.
             const batchSong = batchStatus[hit.id];
+            const inBatch = batchSong !== undefined;
             // Ya la tienes: por el mapa de descargas o por la biblioteca.
             const inLibrary = isInLibrary(hit);
             return (
@@ -649,7 +673,7 @@ export default function SearchPage() {
                     <Button
                       variant="secondary"
                       onClick={() => void handleDownload(hit)}
-                      disabled={downloading !== null || batchProgress !== null}
+                      disabled={Boolean(active[hit.id])}
                       className="w-full"
                     >
                       <IconDownload aria-hidden="true" size={16} stroke={1.75} />
