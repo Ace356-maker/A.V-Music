@@ -1,27 +1,34 @@
 @import "tailwindcss";
 
 /*
-  A.V Music · reproductor local · negro puro
-  Toda la interfaz es de un solo color: negro. Sin paneles grises, sin
-  separadores, sin tonos intermedios — el blanco del texto, los controles y
-  las carátulas son lo único que destaca sobre el lienzo.
+  A.V Music · reproductor local · noche violeta
+  Morados profundos de lienzo y un único acento violeta brillante para lo
+  vivo: reproducir, fila activa, sliders y foco. Un fondo de galaxia
+  (nebulosa violeta + estrellas moradas con parpadeo sutil) en canvas 2D
+  (ver GalaxyBackground) da vida al lienzo; los paneles son de cristal MUY
+  translúcido (blur), sin separadores duros ni parches oscuros.
   Tipografía: Space Grotesk (display, geométrica y profesional) · Instrument
   Sans (cuerpo) · JetBrains Mono (datos).
 */
 
 @theme {
-  --color-canvas: oklch(0% 0 0); /* fondo: negro puro */
-  --color-panel: oklch(0% 0 0); /* paneles: mismo negro, sin tonos */
-  --color-panel-2: oklch(0% 0 0); /* hover: mismo negro */
-  --color-rule: oklch(30% 0 0); /* únicas líneas visibles: las laterales */
-  --color-rule-strong: oklch(42% 0 0); /* pista vacía de sliders: línea visible */
-  --color-faint: oklch(54% 0 0); /* meta */
-  --color-muted: oklch(74% 0 0); /* texto secundario */
-  --color-ink: oklch(100% 0 0); /* texto principal: blanco puro */
-  --color-accent: oklch(100% 0 0); /* acento: blanco puro */
-  --color-accent-strong: oklch(88% 0 0);
-  --color-accent-soft: oklch(0% 0 0); /* fila activa: mismo negro */
-  --color-focus: oklch(100% 0 0);
+  --color-canvas: oklch(15% 0.035 300); /* fondo: morado profundo (noche violeta) */
+  --color-panel: oklch(22% 0.04 300); /* paneles: morado panel */
+  --color-panel-2: oklch(27% 0.05 300); /* hover */
+  --color-rule: oklch(33% 0.045 300); /* bordes de pelo */
+  --color-rule-strong: oklch(44% 0.055 300); /* bordes de inputs y pista de sliders */
+  --color-faint: oklch(62% 0.05 300); /* meta */
+  --color-muted: oklch(76% 0.035 300); /* texto secundario */
+  --color-ink: oklch(97% 0.012 300); /* texto principal (blanco tiznado de violeta) */
+  --color-accent: oklch(71% 0.19 293); /* violeta brillante: play, marcadores, foco */
+  --color-accent-strong: oklch(63% 0.22 293); /* hover del acento */
+  --color-accent-soft: oklch(33% 0.09 295); /* reservado (la selección activa usa un riel lateral) */
+  --color-focus: oklch(71% 0.19 293); /* anillo de foco */
+
+  /* Tintes del fondo (canvas 2D, ver GalaxyBackground) */
+  --color-wave-a: oklch(66% 0.18 295); /* violeta */
+  --color-wave-b: oklch(68% 0.17 330); /* magenta */
+  --color-wave-c: oklch(62% 0.15 280); /* lila */
 
   --font-sans:
     "Instrument Sans Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
@@ -78,9 +85,9 @@
   como capas (el input solo aporta el pulgar); aquí se estiliza la forma del
   input y el pulgar. Webkit y Firefox comparten el alto del elemento.
 
-  Pista fina (4 px) y pulgar pequeño y limpio, centrado en la pista: blanco
-  con un borde oscuro fino para definirse sobre el relleno blanco, sin halos
-  ni anillos — la barra se ve como una línea, no como un bloque.
+  Pista fina (4 px) y pulgar pequeño y limpio, centrado en la pista: violeta
+  con un borde oscuro fino para definirse y un brillo morado sutil (glow) que
+  acompaña al relleno — la barra se ve como una línea, no como un bloque.
 */
 input[type="range"] {
   -webkit-appearance: none;
@@ -98,9 +105,12 @@ input[type="range"]::-webkit-slider-thumb {
   width: 12px;
   height: 12px;
   border-radius: 9999px;
-  background: var(--color-accent);
+  /* Pulgar blanco con halo fino, a juego con la línea blanca del slider */
+  background: #ffffff;
   border: 1px solid rgb(0 0 0 / 0.45);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 0.45),
+    0 0 6px color-mix(in srgb, white 40%, transparent);
   transition: transform 0.15s ease-out;
 }
 
@@ -112,9 +122,11 @@ input[type="range"]::-moz-range-thumb {
   width: 12px;
   height: 12px;
   border-radius: 9999px;
-  background: var(--color-accent);
+  background: #ffffff;
   border: 1px solid rgb(0 0 0 / 0.45);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 0.45),
+    0 0 6px color-mix(in srgb, white 40%, transparent);
 }
 
 /* Manito en todo lo interactivo: botones habilitados (los sliders y enlaces
@@ -199,9 +211,12 @@ button:not(:disabled) {
    en vez de decenas durante la ola. Entra/sale suave con el transition-all
    del <p>. */
 .lyric-line-active {
+  /* Halo BLANCO en la frase en foco (como el título), text-shadow para que
+     rodee la forma de cada letra — más presente que en el título para que
+     la frase activa se destaque del resto. */
   text-shadow:
-    0 0 10px rgb(255 255 255 / 0.28),
-    0 0 3px rgb(255 255 255 / 0.14);
+    0 0 18px color-mix(in srgb, white 48%, transparent),
+    0 0 6px color-mix(in srgb, white 30%, transparent);
 }
 
 /*

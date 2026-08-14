@@ -81,11 +81,13 @@ export function RangeSlider({
 
   const shown = dragValue ?? value;
   const pct = max > min ? Math.min(100, Math.max(0, ((shown - min) / (max - min)) * 100)) : 0;
-  // Relleno con un ligero brillo hacia la punta (de accent-strong a accent);
-  // la pista vacía sigue siendo gris (rule-strong).
+  // Relleno BLANCO de un solo tono con un halo fino y tenue (nada
+  // exagerado): la línea de reproducción/volumen se lee blanca sobre la
+  // pista gris (rule-strong), con un brillo sutil de "tubo" arriba.
   const fill = {
     width: `${pct}%`,
-    background: "linear-gradient(to right, var(--color-accent-strong), var(--color-accent))",
+    background: "linear-gradient(to bottom, #ffffff 0%, color-mix(in srgb, white 78%, #c9c4dd) 100%)",
+    boxShadow: "0 0 5px color-mix(in srgb, white 28%, transparent)",
   } as CSSProperties;
 
   // Burbuja: al arrastrar muestra el valor actual; al pasar el mouse sin

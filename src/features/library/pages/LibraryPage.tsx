@@ -29,6 +29,26 @@ function variantLabel(title: string): string | null {
   return "Remix";
 }
 
+/** Etiqueta del botón de importar con ancho ESTABLE: los dos textos viven
+ * en la misma caja (el corto "Escaneando…" se superpone al largo
+ * "Importar carpeta" con visibility), así el botón NO cambia de tamaño al
+ * pasar de un estado al otro. */
+function ImportLabel({ scanning }: { scanning: boolean }) {
+  return (
+    <span className="relative inline-flex">
+      <span aria-hidden={scanning} className={scanning ? "invisible" : "visible"}>
+        Importar carpeta
+      </span>
+      <span
+        aria-hidden={!scanning}
+        className={cn("absolute inset-0 flex items-center", scanning ? "visible" : "invisible")}
+      >
+        Escaneando…
+      </span>
+    </span>
+  );
+}
+
 export default function LibraryPage() {
   const tracks = useLibrary();
   const { current, isPlaying } = usePlayer();
@@ -52,10 +72,9 @@ export default function LibraryPage() {
           onClick={() => libraryStore.playTrack(track.id)}
           className={cn(
             "grid h-full w-full grid-cols-[2rem_1fr_10rem_4.5rem_2.5rem] items-center gap-3 px-4 py-2.5 text-left",
-            isCurrent && "bg-accent-soft",
           )}
         >
-          <span className="text-right font-mono text-xs text-faint">
+          <span className={cn("text-right font-mono text-xs", isCurrent ? "text-ink" : "text-faint")}>
             {String(index + 1).padStart(2, "0")}
           </span>
           <span className="flex min-w-0 items-center gap-3">
@@ -65,25 +84,33 @@ export default function LibraryPage() {
                 {/* Misma estructura y misma clase activa o no: al enfocar
                     la fila no cambia nada del layout — solo arranca el
                     deslizamiento si desborda. */}
+                {/* La fila en foco se diferencia además con el HALO blanco
+                    (text-shadow, sigue las letras) — no solo por el color. */}
                 <SlideTitle
                   text={track.title}
                   active={isCurrent}
-                  className="text-sm font-medium text-ink"
+                  className={cn(
+                    "text-sm font-medium",
+                    isCurrent && "text-shadow-[0_0_8px_color-mix(in_srgb,white_30%,transparent)]",
+                  )}
                 />
                 {variantLabel(track.title) && (
-                  <span className="inline-flex shrink-0 items-center self-center rounded-sm bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
+                  <span className="inline-flex shrink-0 items-center self-center rounded-sm border border-accent/30 px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
                     {variantLabel(track.title)}
                   </span>
                 )}
               </span>
-              <span className="block truncate text-xs text-muted">
+              <span className="block truncate text-xs text-muted" title={track.artist ?? undefined}>
                 {track.artist ?? "Artista desconocido"}
               </span>
             </span>
           </span>
           {/* Metadatos incompletos: sin álbum se muestra el título de la
               canción en vez de un guion vacío. */}
-          <span className="truncate text-xs text-muted">
+          <span
+            className="truncate text-xs text-muted"
+            title={track.album?.trim() ? track.album : track.title}
+          >
             {track.album?.trim() ? track.album : track.title}
           </span>
           <span className="text-right font-mono text-xs text-faint">
@@ -91,7 +118,7 @@ export default function LibraryPage() {
           </span>
           <span className="flex justify-end">
             {isCurrent && isPlaying ? (
-              <IconPlayerPauseFilled aria-hidden="true" size={18} stroke={1.5} className="text-accent" />
+              <IconPlayerPauseFilled aria-hidden="true" size={18} stroke={1.5} className="text-ink" />
             ) : (
               <IconPlayerPlayFilled aria-hidden="true" size={18} stroke={1.5} className="text-faint" />
             )}
@@ -135,9 +162,9 @@ export default function LibraryPage() {
             Elige una carpeta y A.V Music la escanea en tu propio disco. Sin nube, sin cuentas.
           </p>
         </div>
-        <Button onClick={() => void handleImport()} disabled={scanning}>
+        <Button onClick={() => void handleImport()} disabled={scanning} busy={scanning}>
           <IconFolderOpen aria-hidden="true" size={16} stroke={1.75} />
-          {scanning ? "Escaneando…" : "Importar carpeta"}
+          <ImportLabel scanning={scanning} />
         </Button>
       </header>
 
@@ -153,9 +180,9 @@ export default function LibraryPage() {
               y los metadatos al momento.
             </p>
           </div>
-          <Button onClick={() => void handleImport()} disabled={scanning}>
+          <Button onClick={() => void handleImport()} disabled={scanning} busy={scanning}>
             <IconFolderOpen aria-hidden="true" size={16} stroke={1.75} />
-            {scanning ? "Escaneando…" : "Importar carpeta"}
+            <ImportLabel scanning={scanning} />
           </Button>
         </div>
       ) : (

@@ -25,13 +25,18 @@ export function TitleBar() {
     };
   }, []);
 
-  const control =
+  // Halo blanco sutil al USAR los botones minimizar/maximizar (hover y
+  // clic): la misma luz tenue del resto de la UI. El de cerrar no lo lleva
+  // (es el único con acción destructiva).
+  const windowControl =
+    "flex h-10 w-11 items-center justify-center text-muted transition-colors duration-150 ease-out hover:text-ink active:text-ink hover:drop-shadow-[0_0_6px_color-mix(in_srgb,white_40%,transparent)] active:drop-shadow-[0_0_6px_color-mix(in_srgb,white_40%,transparent)]";
+  const closeControl =
     "flex h-10 w-11 items-center justify-center text-muted transition-colors duration-150 ease-out hover:text-ink active:text-ink";
 
   return (
     <header
       data-tauri-drag-region
-      className="flex h-10 shrink-0 select-none items-center justify-end bg-canvas"
+      className="flex h-10 shrink-0 select-none items-center justify-end"
     >
       <div className="flex items-center">
         <button
@@ -39,7 +44,7 @@ export function TitleBar() {
           aria-label="Minimizar"
           onMouseDown={(event) => event.stopPropagation()}
           onClick={() => void getCurrentWindow().minimize()}
-          className={control}
+          className={windowControl}
         >
           <IconMinus aria-hidden="true" size={15} stroke={2} />
         </button>
@@ -48,7 +53,7 @@ export function TitleBar() {
           aria-label={maximized ? "Restaurar" : "Maximizar"}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={() => void getCurrentWindow().toggleMaximize()}
-          className={control}
+          className={windowControl}
         >
           {maximized ? (
             <IconCopy aria-hidden="true" size={14} stroke={1.75} />
@@ -61,7 +66,7 @@ export function TitleBar() {
           aria-label="Cerrar"
           onMouseDown={(event) => event.stopPropagation()}
           onClick={() => void getCurrentWindow().close()}
-          className={cn(control, "mr-0.5")}
+          className={cn(closeControl, "mr-0.5")}
         >
           <IconX aria-hidden="true" size={16} stroke={1.75} />
         </button>

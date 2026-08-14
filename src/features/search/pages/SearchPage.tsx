@@ -677,7 +677,7 @@ export default function SearchPage() {
                         </span>
                       )}
                       {badge && (
-                        <span className="ml-1.5 inline-flex items-center rounded-sm bg-accent-soft px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
+                        <span className="ml-1.5 inline-flex items-center rounded-sm border border-accent/30 px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
                           {badge}
                         </span>
                       )}

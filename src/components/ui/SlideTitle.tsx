@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -17,10 +17,12 @@ const SLIDE_START_DELAY_MS = 1200;
  * reposo como en reproducción: al pasar el foco a una fila no cambia nada
  * del layout ni del texto visible — no hay ningún saltito.
  *
- * Los títulos largos en reposo muestran "…" (una capa al borde derecho). Al
- * volverse activa, la capa se queda durante la pausa inicial y se retira
- * justo cuando arranca el deslizamiento (marquee continuo, sin corte), que
- * también coincide con el delay del CSS.
+ * Los títulos largos en reposo se recortan limpio al borde derecho (sin
+ * "…" ni parches oscuros: nada de capas con fondo). Al volverse activa (en
+ * reproducción) O al pasar el ratón por encima, arranca el deslizamiento
+ * (marquee continuo, sin corte) tras la pausa inicial: cualquier fila
+ * muestra su título completo al pasarle por encima. El tooltip nativo
+ * (title) muestra el texto completo en todo momento.
  */
 export function SlideTitle({
   text,
@@ -42,15 +44,15 @@ export function SlideTitle({
   const textRef = useRef<HTMLSpanElement>(null);
   const [overflow, setOverflow] = useState(false);
   const [durationSec, setDurationSec] = useState(8);
-  // Mientras la fila está activa y aún no arranca el deslizamiento (pausa
-  // inicial), el título conserva los "…": así el foco no produce ningún
-  // salto. La capa se retira cuando el deslizamiento empieza.
-  const [resting, setResting] = useState(true);
+  // Al pasar el ratón por la fila, el título desliza como el activo (tras la
+  // misma pausa): cualquier fila muestra su nombre completo al hover.
+  const [hovered, setHovered] = useState(false);
 
   // El track (y las copias) es SIEMPRE el mismo, activo o no: mismo texto,
   // mismo ancho, misma posición. La única diferencia es que al estar activo
-  // y desbordar, arranca el deslizamiento tras la pausa.
-  const sliding = active && overflow;
+  // (o con el ratón encima) y desbordar, arranca el deslizamiento tras la
+  // pausa.
+  const sliding = overflow && (active || hovered);
 
   // ¿Desborda el texto el ancho visible? Y cuánto tarda un ciclo según el
   // ancho del texto (velocidad constante, con límites de duración). Se mide
@@ -73,20 +75,12 @@ export function SlideTitle({
     return () => observer.disconnect();
   }, [text, active]);
 
-  // La pausa inicial (misma duración que el delay del CSS): durante ese
-  // tiempo el título en reposo conserva los "…" y no hay salto al enfocar.
-  useEffect(() => {
-    if (!sliding) {
-      setResting(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setResting(false), SLIDE_START_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [sliding]);
-
   return (
     <span
       ref={outerRef}
+      title={text}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className={cn(
         "relative block min-w-0 overflow-hidden",
         align === "center" && (sliding ? "text-left" : "text-center"),
@@ -114,18 +108,10 @@ export function SlideTitle({
           </span>
         )}
       </span>
-      {/* "…" para los títulos largos en reposo (solo listas alineadas a la
-          izquierda): una capa al borde derecho que cubre el texto recortado.
-          Se queda durante la pausa inicial del slide y desaparece cuando el
-          deslizamiento arranca, sin salto al enfocar la fila. */}
-      {overflow && resting && align === "left" && (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 right-0 flex items-center bg-canvas pl-1 pr-0.5"
-        >
-          <span className={cn(className)}>…</span>
-        </span>
-      )}
+      {/* Nada de capas de recorte: el título largo simplemente se corta en
+          el borde del contenedor (overflow-hidden) — sin "…" ni parches
+          oscuros. El hover (o estar en reproducción) lo hace deslizar y el
+          tooltip nativo muestra el texto completo. */}
     </span>
   );
 }

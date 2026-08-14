@@ -1,5 +1,7 @@
 import {
   Fragment,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -50,6 +52,14 @@ const SOURCE_LABELS: Record<string, string> = {
 /** Alto de cada fila de la cola (contenido 36 px + py-3 24 px + el hueco
  * de 2 px entre filas, que entra dentro del alto para el ventaneo exacto). */
 const QUEUE_ROW_HEIGHT = 62;
+
+// El fondo (galaxia) va en chunk aparte: aquí solo se monta mientras el
+// reproductor maximizado está abierto (dos escenas de fondo a la vez
+// gastarían CPU de más).
+const GalaxyBackground = lazy(async () => {
+  const mod = await import("@/components/ui/GalaxyBackground");
+  return { default: mod.GalaxyBackground };
+});
 
 /** Cuánto respetar el scroll manual de la letra antes de volver al centro. */
 const USER_SCROLL_GRACE_MS = 2500;
@@ -711,23 +721,29 @@ export function FullPlayer({
           onDrop={(event) => handleQueueDrop(event, index)}
           onDragEnd={handleQueueDragEnd}
           className={cn(
-            "h-full cursor-grab active:cursor-grabbing",
+            // Fila a ancho completo (arrastre y resaltado de destino del
+            // reordenamiento), con la zona clicable reducida dentro. SIN
+            // cursor de mano: no queremos que se sienta arrastrable al
+            // pasar por las franjas vacías de los lados.
+            "flex h-full w-full items-center",
             dragIndex === index && "opacity-40",
+            isDropTarget && "bg-rule",
           )}
         >
           <button
             type="button"
             onClick={() => playerStore.playTrack(track, queue)}
             className={cn(
-              "flex h-full w-full items-center gap-3 px-5 text-left transition-colors duration-150",
-              isCurrent && "bg-accent-soft",
-              isDropTarget && "bg-rule",
+              // Zona clicable SOLO del número a la duración: márgenes a los
+              // lados (donde no hay contenido, todo va sobre el fondo sin
+              // separador) NO responden al puntero.
+              "mx-5 flex h-full min-w-0 flex-1 items-center gap-3 text-left transition-colors duration-150",
             )}
           >
             <span
               className={cn(
                 "w-6 shrink-0 text-right font-mono text-xs tabular-nums",
-                isCurrent ? "text-accent" : "text-faint",
+                isCurrent ? "text-ink" : "text-faint",
               )}
             >
               {String(index + 1).padStart(2, "0")}
@@ -737,19 +753,24 @@ export function FullPlayer({
               {/* Misma estructura y misma clase activa o no: al enfocar la
                   fila no cambia nada del layout — solo arranca el
                   deslizamiento si desborda. */}
+              {/* La fila en foco se diferencia además con el HALO blanco
+                  (text-shadow, sigue las letras) — no solo por el color. */}
               <SlideTitle
                 text={track.title}
                 active={isCurrent}
-                className="text-sm font-medium text-ink"
+                className={cn(
+                  "text-sm font-medium",
+                  isCurrent && "text-shadow-[0_0_8px_color-mix(in_srgb,white_30%,transparent)]",
+                )}
               />
-              <span className="block truncate text-xs text-muted">
+              <span className="block truncate text-xs text-muted" title={track.artist ?? undefined}>
                 {track.artist ?? "Artista desconocido"}
               </span>
             </span>
             <span
               className={cn(
                 "shrink-0 font-mono text-[11px] tabular-nums",
-                isCurrent ? "text-accent" : "text-faint",
+                isCurrent ? "text-ink" : "text-faint",
               )}
             >
               {formatDuration(track.durationSec)}
@@ -791,11 +812,18 @@ export function FullPlayer({
       // reproductor nunca tapa los controles de ventana (minimizar,
       // maximizar, cerrar) — arranca debajo y baja hasta el fondo completo.
       className={cn(
-        "fixed inset-x-0 bottom-0 top-10 z-50 flex flex-col bg-canvas transition-transform duration-[380ms] ease-out",
+        "fixed inset-x-0 bottom-0 top-10 z-50 flex flex-col overflow-hidden bg-canvas transition-transform duration-[380ms] ease-out",
         open ? "translate-y-0" : "translate-y-full",
       )}
     >
-      <div className="flex min-h-0 flex-1">
+      {/* Fondo (galaxia) del reproductor maximizado, solo mientras está
+          abierto. */}
+      {open && (
+        <Suspense fallback={null}>
+          <GalaxyBackground />
+        </Suspense>
+      )}
+      <div className="relative z-10 flex min-h-0 flex-1">
         {/* Columna izquierda: ahora suena + panel de reproducción (mismo ancho) */}
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Ahora suena: carátula + título, o la letra en su contenedor */}
@@ -923,24 +951,9 @@ export function FullPlayer({
                       )}
                     </div>
                   </div>
-                  {/* Desvanecidos superior e inferior: la letra se funde con
-                      el fondo antes de ambos bordes — sin cortes a mitad de
-                      frase ni arriba ni abajo; las frases entran y salen
-                      suaves. Van por encima de las dos capas del crossfade. */}
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-x-0 top-0 z-20 h-14"
-                    style={{
-                      background: "linear-gradient(to bottom, var(--color-canvas), transparent)",
-                    }}
-                  />
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-14"
-                    style={{
-                      background: "linear-gradient(to top, var(--color-canvas), transparent)",
-                    }}
-                  />
+                  {/* Sin desvanecidos superior/inferior: esas bandas oscuras
+                      se veían como divisiones — la letra va directa sobre
+                      el fondo. */}
                   {/* Selector de fuente de letra: barra pegada a la parte
                       superior, CENTRADA y más angosta que la zona de letra
                       (no ocupa todo el ancho), sin línea divisoria — flecha
@@ -1014,15 +1027,21 @@ export function FullPlayer({
                 </div>
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center gap-6 px-8 py-8">
-                  <CoverCrossfade
-                    src={cover}
-                    className="h-80 w-80 shrink-0 rounded-xl shadow-2xl shadow-black/60 md:h-96 md:w-96 lg:h-[26rem] lg:w-[26rem]"
-                    fallback={
-                      <div className="flex h-full w-full items-center justify-center bg-panel text-faint">
-                        <IconMusic aria-hidden="true" size={96} stroke={1} />
-                      </div>
-                    }
-                  />
+                  {/* La carátula lleva una transparencia notable: la galaxia
+                      del fondo se ve a través de ella. SIN resplandor
+                      morado: nada de halo radial ni brillo de acento — solo
+                      la sombra suave de profundidad. */}
+                  <div className="relative h-80 w-80 shrink-0 md:h-96 md:w-96 lg:h-[26rem] lg:w-[26rem]">
+                    <CoverCrossfade
+                      src={cover}
+                      className="relative h-full w-full rounded-xl opacity-60 shadow-2xl shadow-black/30"
+                      fallback={
+                        <div className="flex h-full w-full items-center justify-center bg-panel/60 text-faint">
+                          <IconMusic aria-hidden="true" size={96} stroke={1} />
+                        </div>
+                      }
+                    />
+                  </div>
 
                   {/* Crossfade real del título (como la letra y la carátula):
                       el título anterior se desvanece (capa de salida) mientras
@@ -1038,7 +1057,7 @@ export function FullPlayer({
                         <SlideTitle
                           text={prevTitleLayer.title}
                           align="center"
-                          className="font-display text-3xl font-semibold tracking-tight text-ink lg:text-4xl"
+                          className="font-display text-3xl font-semibold tracking-tight text-ink text-shadow-[0_0_12px_color-mix(in_srgb,white_28%,transparent)] lg:text-4xl"
                         />
                         {prevTitleLayer.artist && (
                           <p className="mt-1 max-w-3xl text-balance text-center text-base text-muted lg:text-lg">
@@ -1058,10 +1077,14 @@ export function FullPlayer({
                     >
                       {/* El nombre siempre ocupa UNA fila: si desborda el ancho
                           disponible, se desliza (marquee) como en la cola. */}
+                      {/* Halo blanco sutil en el título (sin exagerar):
+                          text-shadow (NO drop-shadow) para que el brillo
+                          rodee la forma de CADA letra y no se sienta como
+                          una caja rectangular. */}
                       <SlideTitle
                         text={current.title}
                         align="center"
-                        className="font-display text-3xl font-semibold tracking-tight text-ink lg:text-4xl"
+                        className="font-display text-3xl font-semibold tracking-tight text-ink text-shadow-[0_0_12px_color-mix(in_srgb,white_28%,transparent)] lg:text-4xl"
                       />
                       {artistLine && (
                         <p className="mt-1 max-w-3xl text-balance text-center text-base text-muted lg:text-lg">
@@ -1083,16 +1106,26 @@ export function FullPlayer({
           {/* Panel de reproducción: ancho = contenedor de la letra */}
           <div onClick={handlePlaybackPanelClick} className="shrink-0">
             <div className="px-6 pt-4">
-              {/* Fila superior: transporte centrado (el volumen y el mic
-                  viven en la cola, abajo a la derecha; minimizar se hace con
-                  clic en cualquier zona del reproductor o con Esc) */}
-              <div className="flex items-center justify-center gap-4">
+              {/* Fila superior: transporte centrado (el mic/karaoke vive
+                  aquí, a la derecha de repetir; el volumen vive en la cola,
+                  abajo a la derecha; minimizar se hace con clic en cualquier
+                  zona del reproductor o con Esc) */}
+              <div className="flex items-center justify-center gap-5">
                 <button
                   type="button"
                   onClick={() => playerStore.toggleShuffle()}
                   aria-label="Mezclar"
                   aria-pressed={shuffle}
-                  className={cn(iconButton, shuffle ? "text-ink" : "text-muted")}
+                  // Mismo efecto que el play/pausa: sin transición ni
+                  // cambios al hover/click — el estado se lee por el color.
+                  // Glow BLANCO cuando está ACTIVO (como el play): el
+                  // brillo solo aparece al usarlo, no en reposo.
+                  className={cn(
+                    "flex items-center justify-center rounded-full",
+                    shuffle
+                      ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
+                      : "text-muted",
+                  )}
                 >
                   <IconArrowsShuffle aria-hidden="true" size={24} stroke={1.75} />
                 </button>
@@ -1104,19 +1137,21 @@ export function FullPlayer({
                 >
                   <IconPlayerSkipBackFilled aria-hidden="true" size={28} stroke={1.5} />
                 </button>
-                {/* Play/pausa en cuadrado redondeado (no redondo), sin
-                    micro-movimientos al pasar el mouse. La zona es contenida
-                    (56 px); el icono es el que destaca. */}
+                {/* Play/pausa SIN fondo y SIN caja invisible: el SVG ES el
+                    botón (icono más grande, halo violeta estático, sin
+                    cambios al hover/click). La compensación óptica del
+                    triángulo va con transform (translate), que no mueve el
+                    layout — los vecinos no se mueven al alternar. */}
                 <button
                   type="button"
                   onClick={() => playerStore.togglePlay()}
                   aria-label={isPlaying ? "Pausar" : "Reproducir"}
-                  className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-canvas shadow-lg shadow-black/40"
+                  className="flex items-center justify-center rounded-full text-ink drop-shadow-[0_0_12px_color-mix(in_srgb,var(--color-accent)_55%,transparent)]"
                 >
                   {isPlaying ? (
-                    <IconPlayerPauseFilled aria-hidden="true" size={32} stroke={1.5} />
+                    <IconPlayerPauseFilled aria-hidden="true" size={40} stroke={1.5} />
                   ) : (
-                    <IconPlayerPlayFilled aria-hidden="true" size={32} stroke={1.5} className="ml-0.5" />
+                    <IconPlayerPlayFilled aria-hidden="true" size={40} stroke={1.5} className="translate-x-px" />
                   )}
                 </button>
                 <button
@@ -1138,13 +1173,42 @@ export function FullPlayer({
                         : "Repetir"
                   }
                   aria-pressed={repeat !== "off"}
-                  className={cn(iconButton, repeat !== "off" ? "text-ink" : "text-muted")}
+                  // Mismo efecto que el play/pausa: sin transición ni
+                  // cambios al hover/click.
+                  // Glow BLANCO cuando está ACTIVO (como el play): el
+                  // brillo solo aparece al usarlo, no en reposo.
+                  className={cn(
+                    "flex items-center justify-center rounded-full",
+                    repeat !== "off"
+                      ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
+                      : "text-muted",
+                  )}
                 >
                   {repeat === "one" ? (
                     <IconRepeatOnce aria-hidden="true" size={24} stroke={1.75} />
                   ) : (
                     <IconRepeat aria-hidden="true" size={24} stroke={1.75} />
                   )}
+                </button>
+
+                {/* Karaoke: pegado a repetir pero con un hueco claro (ml-4)
+                    para que se entienda que es OTRA cosa — el micrófono
+                    alterna carátula ↔ letra. Mismo efecto que el play. */}
+                <button
+                  type="button"
+                  onClick={onToggleLyrics}
+                  aria-label="Ver letras (karaoke)"
+                  aria-pressed={lyricsOn}
+                  // Glow BLANCO cuando está ACTIVO (como el play): el
+                  // brillo solo aparece al usarlo, no en reposo.
+                  className={cn(
+                    "ml-4 flex items-center justify-center rounded-full",
+                    lyricsOn
+                      ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
+                      : "text-muted",
+                  )}
+                >
+                  <IconMicrophone2 aria-hidden="true" size={24} stroke={1.75} />
                 </button>
               </div>
             </div>
@@ -1174,8 +1238,9 @@ export function FullPlayer({
           </div>
         </div>
 
-        {/* Playlist de la carpeta */}
-        <aside className="flex w-80 shrink-0 flex-col border-l border-rule">
+        {/* Playlist de la carpeta: sin fondo de panel, fundida con el
+            degradado — nada de divisiones visibles. */}
+        <aside className="flex w-80 shrink-0 flex-col">
           <div className="px-5 py-4">
             <p className="text-center font-mono text-[10px] uppercase tracking-[0.18em] text-ink">
               Cola de reproducción
@@ -1190,19 +1255,10 @@ export function FullPlayer({
             renderItem={renderQueueItem}
           />
 
-          {/* Sección dividida: volumen + karaoke (mic), dentro de la cola,
-              centrados a lo ancho para que se sientan mejor */}
+          {/* Volumen, dentro de la cola (el mic/karaoke vive ahora en el
+              transporte, a la derecha de repetir) */}
           <div className="shrink-0 px-5 pb-6 pt-4">
             <div className="flex items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={onToggleLyrics}
-                aria-label="Ver letras (karaoke)"
-                aria-pressed={lyricsOn}
-                className={cn(iconButton, lyricsOn ? "text-ink" : "text-muted")}
-              >
-                <IconMicrophone2 aria-hidden="true" size={24} stroke={1.75} />
-              </button>
               <button
                 type="button"
                 onClick={() => playerStore.toggleMute()}

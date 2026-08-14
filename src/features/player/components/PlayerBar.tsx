@@ -155,10 +155,11 @@ export function PlayerBar() {
     "flex items-center justify-center rounded-full transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-40";
 
   return (
-    <footer
-      onClick={handleBarClick}
-      className="relative flex h-21 shrink-0 items-center gap-5 px-5"
-    >
+    <>
+      <footer
+        onClick={handleBarClick}
+        className="relative flex h-21 shrink-0 items-center gap-5 px-5"
+      >
       {/* Pista actual (clic aquí o en la zona abre el reproductor) */}
       <div className="flex min-w-0 w-72 cursor-pointer items-center gap-3">
         <CoverCrossfade
@@ -175,7 +176,12 @@ export function PlayerBar() {
           className="min-w-0"
           style={{ animation: `av-cambio-in ${Math.round(FADE_SEC * 1000)}ms ease` }}
         >
-          <p className="truncate text-sm font-medium text-ink">{current?.title ?? "Sin pista"}</p>
+          {/* Halo blanco sutil en el título (sin exagerar): text-shadow
+              (NO drop-shadow) para que el brillo rodee la forma de cada
+              letra y no se sienta como una caja rectangular. */}
+          <p className="truncate text-sm font-medium text-ink text-shadow-[0_0_8px_color-mix(in_srgb,white_25%,transparent)]">
+            {current?.title ?? "Sin pista"}
+          </p>
           <p className="truncate text-xs text-muted">
             {current?.artist ?? "Elige una canción de tu biblioteca"}
           </p>
@@ -189,14 +195,23 @@ export function PlayerBar() {
 
       {/* Controles + progreso */}
       <div className="flex flex-1 flex-col items-center gap-1.5">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-5">
           <button
             type="button"
             onClick={() => playerStore.toggleShuffle()}
             disabled={!current}
             aria-label="Mezclar"
             aria-pressed={shuffle}
-            className={cn(iconButton, shuffle ? "text-ink" : "text-muted")}
+            // Mismo efecto que el play/pausa: sin transición ni cambios al
+            // hover/click — el estado se lee por el color (muted ↔ ink).
+            // Glow BLANCO cuando está ACTIVO (como el play): el brillo solo
+            // aparece al usarlo, no en reposo.
+            className={cn(
+              "flex items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-40",
+              shuffle
+                ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
+                : "text-muted",
+            )}
           >
             <IconArrowsShuffle aria-hidden="true" size={20} stroke={1.75} />
           </button>
@@ -214,12 +229,17 @@ export function PlayerBar() {
             onClick={() => playerStore.togglePlay()}
             disabled={!current}
             aria-label={isPlaying ? "Pausar" : "Reproducir"}
-            className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent text-canvas shadow-lg shadow-black/30 disabled:cursor-not-allowed disabled:opacity-40"
+            // Play/pausa SIN fondo y SIN caja invisible: el SVG ES el botón
+            // (icono más grande, halo violeta estático, sin cambios al
+            // hover/click). La compensación óptica del triángulo va con
+            // transform (translate), que no mueve el layout — los vecinos
+            // no se mueven al alternar play↔pausa.
+            className="flex items-center justify-center rounded-full text-ink drop-shadow-[0_0_10px_color-mix(in_srgb,var(--color-accent)_50%,transparent)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {isPlaying ? (
-              <IconPlayerPauseFilled aria-hidden="true" size={26} stroke={1.5} />
+              <IconPlayerPauseFilled aria-hidden="true" size={34} stroke={1.5} />
             ) : (
-              <IconPlayerPlayFilled aria-hidden="true" size={26} stroke={1.5} className="ml-0.5" />
+              <IconPlayerPlayFilled aria-hidden="true" size={34} stroke={1.5} className="translate-x-px" />
             )}
           </button>
           <button
@@ -237,13 +257,44 @@ export function PlayerBar() {
             disabled={!current}
             aria-label={repeat === "one" ? "Repetir una" : repeat === "all" ? "Repetir todas" : "Repetir"}
             aria-pressed={repeat !== "off"}
-            className={cn(iconButton, repeat !== "off" ? "text-ink" : "text-muted")}
+            // Mismo efecto que el play/pausa (sin transición ni cambios al
+            // hover/click); el modo se lee por el icono (repetir / repetir
+            // una) y el color (muted ↔ ink).
+            // Glow BLANCO cuando está ACTIVO (como el play): el brillo solo
+            // aparece al usarlo, no en reposo.
+            className={cn(
+              "flex items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-40",
+              repeat !== "off"
+                ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
+                : "text-muted",
+            )}
           >
             {repeat === "one" ? (
               <IconRepeatOnce aria-hidden="true" size={20} stroke={1.75} />
             ) : (
               <IconRepeat aria-hidden="true" size={20} stroke={1.75} />
             )}
+          </button>
+
+          {/* Karaoke: pegado a repetir pero con un hueco claro (ml-4) para
+              que se entienda que es OTRA cosa — el micrófono abre las
+              letras. Mismo efecto que el play/pausa. */}
+          <button
+            type="button"
+            onClick={openLyrics}
+            disabled={!current}
+            aria-label="Ver letras (karaoke)"
+            aria-pressed={lyricsOn}
+            // Glow BLANCO cuando está ACTIVO (como el play): el brillo solo
+            // aparece al usarlo, no en reposo.
+            className={cn(
+              "ml-4 flex items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-40",
+              lyricsOn
+                ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
+                : "text-muted",
+            )}
+          >
+            <IconMicrophone2 aria-hidden="true" size={22} stroke={1.75} />
           </button>
         </div>
         <div className="flex w-full max-w-xl items-center gap-3">
@@ -269,18 +320,9 @@ export function PlayerBar() {
         </div>
       </div>
 
-      {/* Letras (mic) · volumen */}
+      {/* Volumen (el mic/karaoke vive ahora en el transporte, a la derecha
+          de repetir, separado para que se lea como otra función) */}
       <div className="flex w-64 shrink-0 items-center justify-end gap-3">
-        <button
-          type="button"
-          onClick={openLyrics}
-          disabled={!current}
-          aria-label="Ver letras (karaoke)"
-          aria-pressed={lyricsOn}
-          className={cn(iconButton, lyricsOn ? "text-ink" : "text-muted")}
-        >
-          <IconMicrophone2 aria-hidden="true" size={22} stroke={1.75} />
-        </button>
         <button
           type="button"
           onClick={() => playerStore.toggleMute()}
@@ -307,15 +349,6 @@ export function PlayerBar() {
         />
       </div>
 
-      <FullPlayer
-        open={fullOpen}
-        // Al minimizar se conserva la vista (letra o carátula): al volver a
-        // maximizar abre directo en como estaba.
-        onClose={() => setFullOpen(false)}
-        lyricsOn={lyricsOn}
-        onToggleLyrics={toggleLyrics}
-      />
-
       {/* Versión de la app: esquina inferior derecha, debajo del volumen.
           Superpuesta y sin interacción (pointer-events-none) para no
           interferir con nada de la barra. */}
@@ -324,6 +357,22 @@ export function PlayerBar() {
           v{appVersion}
         </span>
       )}
-    </footer>
+      </footer>
+
+      {/* El reproductor maximizado va FUERA de la barra: la barra tiene
+          backdrop-filter (glassmorphism) y ese filtro convierte a la barra
+          en contenedor de bloque para los descendientes position: fixed —
+          el FullPlayer quedaría aplastado en una franja de la barra en vez
+          de llenar la ventana. Como hermano, se posiciona contra la
+          ventana (top-10 = alto de la TitleBar). */}
+      <FullPlayer
+        open={fullOpen}
+        // Al minimizar se conserva la vista (letra o carátula): al volver a
+        // maximizar abre directo en como estaba.
+        onClose={() => setFullOpen(false)}
+        lyricsOn={lyricsOn}
+        onToggleLyrics={toggleLyrics}
+      />
+    </>
   );
 }
