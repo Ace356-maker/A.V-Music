@@ -227,6 +227,35 @@ fn ytdlp(app: &tauri::AppHandle, args: &[&str]) -> Result<std::process::Output, 
         .map_err(|err| format!("No se pudo ejecutar yt-dlp: {err}"))
 }
 
+/// Decodifica entidades HTML que vienen de scraping web (og:title, og:description, APIs).
+fn decode_html_entities(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_string();
+    }
+    text.replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&#x27;", "'")
+        .replace("&#X27;", "'")
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&#x22;", "\"")
+        .replace("&#X22;", "\"")
+        .replace("&amp;", "&")
+        .replace("&#38;", "&")
+        .replace("&#x26;", "&")
+        .replace("&#X26;", "&")
+        .replace("&lt;", "<")
+        .replace("&#60;", "<")
+        .replace("&#x3C;", "<")
+        .replace("&#X3C;", "<")
+        .replace("&gt;", ">")
+        .replace("&#62;", ">")
+        .replace("&#x3E;", ">")
+        .replace("&#X3E;", ">")
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+}
+
 /// Limpia un tag leído del disco: descarta caracteres corruptos (el
 /// reemplazo U+FFFD aparece cuando el texto se escribió en Latin-1 y se leyó
 /// como UTF-8, rompiendo las tildes) y controles. Devuelve `None` si queda
@@ -240,7 +269,7 @@ fn clean_tag(value: &str) -> Option<String> {
     if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(decode_html_entities(trimmed))
     }
 }
 
@@ -690,6 +719,8 @@ fn ytmusic_song_info(renderer: &serde_json::Value) -> Option<(String, String, Ve
                 .collect::<Vec<String>>()
         })
         .unwrap_or_default();
+    let title = decode_html_entities(&title);
+    let artists = artists.into_iter().map(|a| decode_html_entities(&a)).collect();
     Some((id.to_string(), title, artists))
 }
 
@@ -719,7 +750,7 @@ fn fetch_og_title(url: &str) -> Option<String> {
     let start = html.find(marker)? + marker.len();
     let rest = &html[start..];
     let end = rest.find('"')?;
-    let title = rest[..end].trim().replace("&amp;", "&");
+    let title = decode_html_entities(rest[..end].trim());
     if title.is_empty() || title == "NA" {
         None
     } else {
@@ -772,7 +803,7 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             }
             // Título tal cual lo da yt-dlp (sin generar colaboradores: los
             // paréntesis exactos los pone después la API de YT Music).
-            let title = parts[1].trim();
+            let title = decode_html_entities(parts[1].trim());
             let artists_json = parts[5].trim();
             let uploader = parts[3].trim();
             let thumbnail = parts[4].trim();
@@ -781,11 +812,11 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
             }
             Some(SearchHit {
                 id: parts[0].to_string(),
-                title: title.to_string(),
+                title,
                 uploader: if uploader.is_empty() || uploader == "NA" {
                     String::new()
                 } else {
-                    uploader.to_string()
+                    decode_html_entities(uploader)
                 },
                 duration_sec: parts[2].parse::<u64>().unwrap_or(0),
                 thumbnail: if thumbnail.is_empty() || thumbnail == "NA" {
@@ -794,7 +825,10 @@ fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, St
                     thumbnail.to_string()
                 },
                 cover_url: None,
-                artists: parse_artists_json(artists_json),
+                artists: parse_artists_json(artists_json)
+                    .into_iter()
+                    .map(|a| decode_html_entities(&a))
+                    .collect(),
             })
         })
         .collect();
@@ -1565,11 +1599,11 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
 
     Ok(SearchHit {
         id: parts[0].to_string(),
-        title,
+        title: decode_html_entities(&title),
         uploader: if uploader.is_empty() || uploader == "NA" {
             String::new()
         } else {
-            uploader.to_string()
+            decode_html_entities(uploader)
         },
         duration_sec: parts[3].parse::<u64>().unwrap_or(0),
         thumbnail: if thumbnail.is_empty() || thumbnail == "NA" {
@@ -1578,7 +1612,7 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
             thumbnail.to_string()
         },
         cover_url: None,
-        artists,
+        artists: artists.into_iter().map(|a| decode_html_entities(&a)).collect(),
     })
 }
 
@@ -2337,7 +2371,7 @@ fn fetch_og_description(video_id: &str) -> Option<String> {
     let start = html.find(marker)? + marker.len();
     let rest = &html[start..];
     let end = rest.find('"')?;
-    let desc = rest[..end].trim().replace("&amp;", "&");
+    let desc = decode_html_entities(rest[..end].trim());
     if desc.is_empty() || desc == "NA" {
         None
     } else {
@@ -2351,11 +2385,11 @@ fn fetch_og_description(video_id: &str) -> Option<String> {
 fn parse_performers(desc: &str) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for part in desc.split(" y ").flat_map(|part| part.split(", ")) {
-        let name = part.trim();
-        if name.is_empty() || out.iter().any(|existing| existing.eq_ignore_ascii_case(name)) {
+        let name = decode_html_entities(part.trim());
+        if name.is_empty() || out.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
             continue;
         }
-        out.push(name.to_string());
+        out.push(name);
         if out.len() >= 3 {
             break;
         }
