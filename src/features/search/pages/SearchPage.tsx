@@ -15,7 +15,12 @@ import { VirtualList } from "@/components/ui/VirtualList";
 import { formatDuration } from "@/lib/format";
 import type { Track } from "@/types";
 import { libraryStore, useLibrary } from "@/features/library/libraryStore";
-import { downloadStore, useDownloads, type SearchHit } from "@/features/search/downloadStore";
+import {
+  downloadStore,
+  useDownloads,
+  type SearchHit,
+  type SearchResponse,
+} from "@/features/search/downloadStore";
 
 /** Alto de cada fila de resultados (contenido 40 px + py-3 24 px). */
 const ROW_HEIGHT = 64;
@@ -33,8 +38,11 @@ const RESOLVE_CACHE_LIMIT = 40;
 
 function clearOldCaches(): void {
   try {
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= 4; i++) {
       localStorage.removeItem(`avmusic.resolveCache.v${i}`);
+    }
+    // Limpieza de cachés de búsqueda viejas (ya no se guardan).
+    for (let i = 1; i <= 5; i++) {
       localStorage.removeItem(`avmusic.searchCache.v${i}`);
     }
   } catch {
@@ -63,46 +71,6 @@ function cacheResolve(link: string, hit: SearchHit): void {
     // Límite razonable: se descartan las entradas más viejas.
     while (entries.length > RESOLVE_CACHE_LIMIT) entries.shift();
     localStorage.setItem(RESOLVE_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // Sin persistencia: la caché vive solo durante la sesión.
-  }
-}
-
-/**
- * Caché de búsquedas de texto (query → resultados): cada búsqueda dispara
- * una invocación de yt-dlp que tarda unos segundos; repetir la misma
- * consulta (algo muy común al descargar de a una) ahora es instantáneo.
- * Con tiempo de vida para no quedarse con resultados eternamente viejos.
- */
-const SEARCH_CACHE_KEY = "avmusic.searchCache.v4";
-const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
-const SEARCH_CACHE_LIMIT = 30;
-
-interface SearchCacheEntry {
-  at: number;
-  hits: SearchHit[];
-}
-
-function loadSearchCache(): Record<string, SearchCacheEntry> {
-  try {
-    const raw = localStorage.getItem(SEARCH_CACHE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    if (parsed && typeof parsed === "object") {
-      return parsed as Record<string, SearchCacheEntry>;
-    }
-  } catch {
-    // Caché corrupta: se empieza de cero.
-  }
-  return {};
-}
-
-function cacheSearch(query: string, hits: SearchHit[]): void {
-  try {
-    const next = { ...loadSearchCache(), [query]: { at: Date.now(), hits } };
-    const entries = Object.entries(next);
-    // Límite razonable: se descartan las entradas más viejas.
-    while (entries.length > SEARCH_CACHE_LIMIT) entries.shift();
-    localStorage.setItem(SEARCH_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
   } catch {
     // Sin persistencia: la caché vive solo durante la sesión.
   }
@@ -173,8 +141,16 @@ export default function SearchPage() {
   // al cambio de vista (query, resultados, selección, progreso, lote y
   // descargadas se conservan al volver a Buscar).
   const downloads = useDownloads();
-  const { progress, active, failed, downloaded, query, results, isPlaylist, selected } =
-    downloads;
+  const {
+    progress,
+    active,
+    failed,
+    downloaded,
+    query,
+    results,
+    isPlaylist,
+    selected,
+  } = downloads;
   const batchProgress = downloads.batch;
   const batchStatus = batchProgress ? batchProgress.status : {};
 
@@ -272,22 +248,38 @@ export default function SearchPage() {
         void validateDownloaded();
         return;
       }
-      // Búsqueda con caché: repetir la misma consulta es instantáneo (la
-      // primera tarda por yt-dlp, las siguientes salen de localStorage).
-      const cachedSearch = loadSearchCache()[q];
-      let hits: SearchHit[];
-      if (cachedSearch && Date.now() - cachedSearch.at < SEARCH_CACHE_TTL_MS) {
-        hits = cachedSearch.hits;
-      } else {
-        hits = await invoke<SearchHit[]>("yt_search", { query: q });
-        cacheSearch(q, hits);
-      }
-      downloadStore.setSession({ query: q, results: hits });
-      void validateDownloaded();
-      if (hits.length === 0) {
+      // Sin caché: cada búsqueda consulta a YouTube Music de nuevo, para
+      // que las carátulas y resultados estén siempre frescos (una caché
+      // vieja podía dejar carátulas que ya no cargan).
+      const resp = await invoke<SearchResponse>("yt_search", { query: q });
+      if (resp.kind === "artist" && (resp.albums.length > 0 || resp.singles.length > 0)) {
+        // La consulta resolvió a un ARTISTA: toda su discografía como una
+        // lista plana — los álbumes con sus canciones en orden y los
+        // sencillos al final — con carátula y duración como una búsqueda
+        // normal (sin cabeceras de álbum).
+        const albumTracks = resp.albums.flatMap((album) => album.tracks);
+        downloadStore.setSession({
+          query: q,
+          results: [...albumTracks, ...resp.singles],
+          isPlaylist: false,
+          selected: new Set(),
+        });
+        void validateDownloaded();
+        const albumCount = resp.albums.reduce((sum, album) => sum + album.tracks.length, 0);
         setMessage(
-          "Sin resultados para esa búsqueda. Prueba con otro título o pega un enlace de YouTube Music.",
+          `Discografía de ${resp.artistName}: ${resp.albums.length} álbumes (${albumCount} canciones) · ${resp.singles.length} sencillos`,
         );
+      } else {
+        downloadStore.setSession({
+          query: q,
+          results: resp.songs,
+        });
+        void validateDownloaded();
+        if (resp.songs.length === 0) {
+          setMessage(
+            "Sin resultados para esa búsqueda. Prueba con otro título o pega un enlace de YouTube Music.",
+          );
+        }
       }
     } catch (err) {
       downloadStore.setSession({ results: null, selected: new Set() });
@@ -420,7 +412,7 @@ export default function SearchPage() {
       (hit) => selected.has(hit.id) && !isInLibrary(hit),
     );
     if (pending.length === 0) {
-      setMessage("Todas las canciones de esta playlist ya están descargadas.");
+      setMessage("Todas las canciones ya están descargadas.");
       return;
     }
     setMessage(null);
@@ -451,7 +443,7 @@ export default function SearchPage() {
     downloadStore.endBatch();
     setMessage(
       ok === pending.length
-        ? `${ok} canciones descargadas de la playlist.`
+        ? `${ok} canciones descargadas.`
         : `${ok} de ${pending.length} canciones descargadas; las demás dieron error.`,
     );
   }

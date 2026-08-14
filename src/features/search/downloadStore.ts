@@ -30,6 +30,25 @@ export interface SearchHit {
   artists?: string[];
 }
 
+/** Un álbum de la discografía de un artista: título, año y sus canciones
+ * en orden (tal como las lista YouTube Music). */
+export interface ArtistAlbum {
+  title: string;
+  year: string;
+  tracks: SearchHit[];
+}
+
+/** Respuesta del backend para una búsqueda: lista plana de canciones o la
+ * discografía completa de un artista (álbumes + sencillos). */
+export interface SearchResponse {
+  kind: "songs" | "artist";
+  songs: SearchHit[];
+  artistName: string;
+  albums: ArtistAlbum[];
+  singles: SearchHit[];
+  singlesTotal: number;
+}
+
 /** Estado de una canción dentro del lote de descarga de playlist. */
 export type BatchSongStatus = "queued" | "downloading" | "done" | "error";
 

@@ -39,7 +39,7 @@ struct ProgressPayload {
 }
 
 /// Resultado de una búsqueda de música (YouTube, sin cuenta).
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SearchHit {
     id: String,
@@ -64,6 +64,34 @@ struct SearchHit {
 struct PlaylistResult {
     title: String,
     hits: Vec<SearchHit>,
+}
+
+/// Un álbum de la discografía de un artista: título, año y sus canciones
+/// EN ORDEN, tal como las lista YouTube Music en la página del álbum.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ArtistAlbum {
+    title: String,
+    year: String,
+    tracks: Vec<SearchHit>,
+}
+
+/// Respuesta de `yt_search`: o una lista plana de canciones (búsqueda
+/// normal, `kind = "songs"`) o la discografía completa de un artista
+/// (`kind = "artist"`) cuando la consulta resuelve a un artista: álbumes
+/// con sus canciones en orden y los sencillos. `singles_total` es el
+/// número REAL de sencillos del artista; la lista `singles` puede traer
+/// solo los más recientes (cada sencillo es una petición aparte).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResponse {
+    /// "songs" | "artist"
+    kind: String,
+    songs: Vec<SearchHit>,
+    artist_name: String,
+    albums: Vec<ArtistAlbum>,
+    singles: Vec<SearchHit>,
+    singles_total: usize,
 }
 
 /// Candado para la resolución/descarga de ffmpeg: con varias descargas en
@@ -661,12 +689,39 @@ fn read_lyrics_variants(path: String) -> Option<LyricsVariants> {
 
 /// Busca canciones en YouTube Music (pestaña "Songs": solo audio oficial y
 /// Topic, nada de vídeos). Corre fuera del hilo principal para que la UI no
-/// se congele mientras yt-dlp trabaja.
+/// se congele mientras yt-dlp trabaja. Si la consulta resuelve a un
+/// ARTISTA, devuelve su discografía completa (álbumes con sus canciones en
+/// orden y los sencillos) en vez de la lista de canciones suelta: la
+/// discografía se intenta EN PARALELO con la búsqueda normal, así una
+/// consulta que no es de artista no se demora nada.
 #[tauri::command]
-async fn yt_search(app: tauri::AppHandle, query: String) -> Result<Vec<SearchHit>, String> {
-    tauri::async_runtime::spawn_blocking(move || search_sync(&app, &query))
-        .await
-        .map_err(|err| format!("Búsqueda interrumpida: {err}"))?
+async fn yt_search(app: tauri::AppHandle, query: String) -> Result<SearchResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // La discografía de artista corre en un hilo aparte mientras yt-dlp
+        // hace la búsqueda normal; al final gana la discografía si la
+        // consulta era un artista, si no la lista de canciones ya está.
+        let (disc_tx, disc_rx) = std::sync::mpsc::channel::<Option<SearchResponse>>();
+        let disc_query = query.clone();
+        std::thread::spawn(move || {
+            let _ = disc_tx.send(artist_discography_sync(&disc_query));
+        });
+        let songs = search_sync(&app, &query)?;
+        if let Ok(Some(resp)) = disc_rx.recv_timeout(std::time::Duration::from_secs(45)) {
+            if !resp.albums.is_empty() || !resp.singles.is_empty() {
+                return Ok(resp);
+            }
+        }
+        Ok(SearchResponse {
+            kind: "songs".to_string(),
+            songs,
+            artist_name: String::new(),
+            albums: Vec::new(),
+            singles: Vec::new(),
+            singles_total: 0,
+        })
+    })
+    .await
+    .map_err(|err| format!("Búsqueda interrumpida: {err}"))?
 }
 
 /// Parsea el campo `%(artists)j` de yt-dlp a una lista limpia de
@@ -848,6 +903,507 @@ fn fetch_og_title(url: &str) -> Option<String> {
     } else {
         Some(title)
     }
+}
+
+/// Clave de la API interna de YouTube Music (pública, la misma que usa su
+/// interfaz web) para youtubei/v1.
+const YTM_INNER_TUBE_KEY: &str = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+
+/// Llama a la API interna de YouTube Music (youtubei/v1) y devuelve el JSON
+/// si la petición tuvo éxito. `endpoint` es "search" o "browse" y
+/// `body_tail` va DESPUÉS del contexto de cliente (query, browseId o
+/// continuation). Máximo 8 segundos; `None` si falla o llega un error.
+fn ytm_api(endpoint: &str, body_tail: &str) -> Option<serde_json::Value> {
+    let body = format!(
+        r#"{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240722.01.00","hl":"es"}}}},"#
+    ) + body_tail
+        + "}";
+    let url = format!(
+        "https://music.youtube.com/youtubei/v1/{endpoint}?key={YTM_INNER_TUBE_KEY}"
+    );
+    let output = command("curl")
+        .args([
+            "-s",
+            "-L",
+            "--fail",
+            "--max-time",
+            "8",
+            "-H",
+            "Content-Type: application/json",
+            "-A",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+            "-d",
+            body.as_str(),
+            url.as_str(),
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+/// Recorre un JSON de YT Music y devuelve todos los
+/// `musicResponsiveListItemRenderer` (filas de canción) en orden de aparición.
+fn ytm_rows(endpoint: &str, body_tail: &str) -> Vec<serde_json::Value> {
+    let Some(json) = ytm_api(endpoint, body_tail) else {
+        return Vec::new();
+    };
+    fn walk(value: &serde_json::Value, rows: &mut Vec<serde_json::Value>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(renderer) = map.get("musicResponsiveListItemRenderer") {
+                    rows.push(renderer.clone());
+                }
+                for child in map.values() {
+                    walk(child, rows);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    walk(child, rows);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut rows = Vec::new();
+    walk(&json, &mut rows);
+    rows
+}
+
+/// Busca el id del canal oficial de un artista (UC…) y su nombre para una
+/// consulta: si el resultado principal de YT Music es un artista (tarjeta
+/// superior con `MUSIC_PAGE_TYPE_ARTIST`), lo devuelve; si no (una canción,
+/// una lista…), `None` y la búsqueda normal sigue su curso.
+fn find_artist_browse_id(query: &str) -> Option<(String, String)> {
+    let body_tail = format!(
+        r##""query":{},"params":"EgWKAQIIAWoKEAoQCRADEAA%3D""##,
+        serde_json::to_string(query).ok()?
+    );
+    let json = ytm_api("search", &body_tail)?;
+    // La tarjeta principal: el título con browseEndpoint de artista es el
+    // nombre del artista y el browseId, su canal oficial.
+    fn walk(value: &serde_json::Value) -> Option<(String, String)> {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(card) = map.get("musicCardShelfRenderer") {
+                    let title = card.pointer("/title/runs/0/text")?.as_str()?;
+                    let endpoint = card.pointer("/title/runs/0/navigationEndpoint")?;
+                    let page_type = endpoint
+                        .pointer(
+                            "/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType",
+                        )?
+                        .as_str()?;
+                    if page_type == "MUSIC_PAGE_TYPE_ARTIST" {
+                        let browse_id = endpoint
+                            .pointer("/browseEndpoint/browseId")?
+                            .as_str()?;
+                        return Some((decode_html_entities(title), browse_id.to_string()));
+                    }
+                }
+                for child in map.values() {
+                    if let Some(found) = walk(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    if let Some(found) = walk(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+    walk(&json)
+}
+
+/// Un lanzamiento de la discografía de un artista (álbum o sencillo), tal
+/// como aparece en su página de discografía: título, año, tipo, la id de su
+/// página (MPREb_…) y la id de su LISTA (OLAK5uy_…): la lista del
+/// lanzamiento contiene las versiones de AUDIO (Topic, sin vídeo) de cada
+/// canción, con la carátula del álbum/sencillo.
+#[derive(Clone)]
+struct ReleaseItem {
+    title: String,
+    year: String,
+    is_album: bool,
+    browse_id: String,
+    playlist_id: String,
+}
+
+/// Trae la discografía COMPLETA de un artista (todos los álbumes y
+/// sencillos, más recientes primero) desde su página de discografía. Sigue
+/// las continuaciones si la hay (hasta 2 páginas extra); la mayoría de
+/// artistas cabe en la primera.
+fn fetch_discography(artist_id: &str) -> Vec<ReleaseItem> {
+    let body_tail = format!(
+        r##""browseId":"MPAD{artist_id}","params":"ggMIKgYIAhoCAQI%3D""##
+    );
+    let Some(json) = ytm_api("browse", &body_tail) else {
+        return Vec::new();
+    };
+    let mut releases = Vec::new();
+    let mut pending = vec![json];
+    let mut pages = 0;
+    while let Some(current) = pending.pop() {
+        // Continuación: pedir la siguiente página de la discografía.
+        if pages > 0 {
+            let token = {
+                let mut found = None;
+                fn find_token(value: &serde_json::Value, found: &mut Option<String>) {
+                    match value {
+                        serde_json::Value::Object(map) => {
+                            if let Some(cont) = map.get("continuationCommand") {
+                                if let Some(token) =
+                                    cont.get("token").and_then(|t| t.as_str())
+                                {
+                                    *found = Some(token.to_string());
+                                    return;
+                                }
+                            }
+                            for child in map.values() {
+                                find_token(child, found);
+                            }
+                        }
+                        serde_json::Value::Array(items) => {
+                            for child in items {
+                                find_token(child, found);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                find_token(&current, &mut found);
+                found
+            };
+            let Some(token) = token else { break };
+            let Some(cont_tail) = serde_json::to_string(&token)
+                .ok()
+                .map(|encoded| format!(r##""continuation":{encoded}"##))
+            else {
+                break;
+            };
+            let Some(next) = ytm_api("browse", &cont_tail) else { break };
+            pending.push(next);
+            continue;
+        }
+        // Recoger todos los `musicTwoRowItemRenderer` (cada uno es un
+        // lanzamiento) en orden de aparición.
+        fn collect(value: &serde_json::Value, out: &mut Vec<ReleaseItem>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(renderer) = map.get("musicTwoRowItemRenderer") {
+                        if let Some(item) = release_from_two_row(renderer) {
+                            out.push(item);
+                        }
+                    }
+                    for child in map.values() {
+                        collect(child, out);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for child in items {
+                        collect(child, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        collect(&current, &mut releases);
+        pages += 1;
+    }
+    releases
+}
+
+/// Convierte un `musicTwoRowItemRenderer` de la discografía (un lanzamiento)
+/// en un `ReleaseItem`. Solo cuentan los lanzamientos reales (browseId
+/// MPREb_…); la carátula es la del lanzamiento y el año sale del subtítulo
+/// ("Álbum • 2025" / "Single • 2024").
+fn release_from_two_row(renderer: &serde_json::Value) -> Option<ReleaseItem> {
+    let title = renderer
+        .pointer("/title/runs")
+        .and_then(|runs| runs.as_array())
+        .map(|runs| {
+            runs.iter()
+                .filter_map(|run| run.get("text").and_then(|text| text.as_str()))
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    if title.is_empty() || title == "NA" {
+        return None;
+    }
+    let browse_id = renderer
+        .pointer("/navigationEndpoint/browseEndpoint/browseId")?
+        .as_str()?
+        .to_string();
+    if !browse_id.starts_with("MPREb_") {
+        return None;
+    }
+    let subtitle = renderer
+        .pointer("/subtitle/runs")
+        .and_then(|runs| runs.as_array())
+        .map(|runs| {
+            runs.iter()
+                .filter_map(|run| run.get("text").and_then(|text| text.as_str()))
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    let year = subtitle
+        .split('•')
+        .last()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .unwrap_or_default();
+    // La id de la lista del lanzamiento (OLAK5uy_…) aparece dentro del ítem
+    // (menú / botón de play): se busca el primer valor que empiece por ese
+    // prefijo, así el esquema puede cambiar sin romper la extracción.
+    let playlist_id = find_playlist_id(renderer);
+    Some(ReleaseItem {
+        title: decode_html_entities(&title),
+        year,
+        is_album: subtitle.to_lowercase().contains("lbum"),
+        browse_id,
+        playlist_id: playlist_id.unwrap_or_default(),
+    })
+}
+
+/// Busca en un JSON de YT Music el primer id de lista ("OLAK5uy_…").
+fn find_playlist_id(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => {
+            if text.starts_with("OLAK5uy_") {
+                Some(text.clone())
+            } else {
+                None
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for child in map.values() {
+                if let Some(found) = find_playlist_id(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                if let Some(found) = find_playlist_id(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Parsea una duración de YT Music ("3:45" o "1:02:33") a segundos.
+/// `None` si el texto no es una duración (p. ej. "487 M reproducciones").
+fn parse_duration(text: &str) -> Option<u64> {
+    let parts: Vec<&str> = text.trim().split(':').collect();
+    if parts.len() == 2 {
+        let minutes: u64 = parts[0].parse().ok()?;
+        let seconds: u64 = parts[1].parse().ok()?;
+        if seconds < 60 {
+            return Some(minutes * 60 + seconds);
+        }
+    } else if parts.len() == 3 {
+        let hours: u64 = parts[0].parse().ok()?;
+        let minutes: u64 = parts[1].parse().ok()?;
+        let seconds: u64 = parts[2].parse().ok()?;
+        if minutes < 60 && seconds < 60 {
+            return Some(hours * 3600 + minutes * 60 + seconds);
+        }
+    }
+    None
+}
+
+/// Convierte una fila de canción de la página de un lanzamiento en un
+/// `SearchHit`: id de vídeo, título e intérpretes exactos de YT Music, la
+/// duración (columna fija de la fila, "3:04"; la tercera flexColumn es el
+/// contador de reproducciones) y la carátula del vídeo — la misma
+/// miniatura i.ytimg.com de la búsqueda normal, que siempre carga (para
+/// los Topic es la portada del álbum).
+fn hit_from_release_row(row: &serde_json::Value) -> Option<SearchHit> {
+    let (id, title, artists) = ytmusic_song_info(row)?;
+    let duration_sec = row
+        .pointer("/fixedColumns/0/musicResponsiveListItemFixedColumnRenderer/text/runs")
+        .and_then(|runs| runs.as_array())
+        .and_then(|runs| runs.first())
+        .and_then(|run| run.get("text").and_then(|text| text.as_str()))
+        .and_then(parse_duration)
+        .unwrap_or(0);
+    Some(SearchHit {
+        thumbnail: format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"),
+        id,
+        title,
+        uploader: String::new(),
+        duration_sec,
+        cover_url: None,
+        artists,
+    })
+}
+
+/// Abre la página de un lanzamiento (álbum o sencillo) y devuelve sus
+/// canciones EN ORDEN. `None` si no se pudo leer ninguna.
+fn fetch_release_tracks(browse_id: &str) -> Option<Vec<SearchHit>> {
+    let body_tail = format!(r##""browseId":{}"##, serde_json::to_string(browse_id).ok()?);
+    let rows = ytm_rows("browse", &body_tail);
+    let hits: Vec<SearchHit> = rows.iter().filter_map(hit_from_release_row).collect();
+    if hits.is_empty() {
+        None
+    } else {
+        Some(hits)
+    }
+}
+
+/// Abre la LISTA del lanzamiento (browseId "VL" + OLAK5uy_…) y devuelve sus
+/// canciones EN ORDEN: son las versiones de AUDIO (Topic, sin vídeo), cuya
+/// miniatura es la portada del álbum/sencillo. Solo cuenta las filas que son
+/// entradas reales de la lista (con `playlistItemData`), para no mezclar
+/// secciones "relacionadas" de la página.
+fn fetch_playlist_tracks(playlist_id: &str) -> Option<Vec<SearchHit>> {
+    let browse_id = format!("VL{playlist_id}");
+    let body_tail = format!(r##""browseId":{}"##, serde_json::to_string(&browse_id).ok()?);
+    let rows = ytm_rows("browse", &body_tail);
+    let hits: Vec<SearchHit> = rows
+        .iter()
+        .filter(|row| row.get("playlistItemData").is_some())
+        .filter_map(hit_from_release_row)
+        .collect();
+    if hits.is_empty() {
+        None
+    } else {
+        Some(hits)
+    }
+}
+
+/// Descarga las canciones de muchos lanzamientos con un tope de curl en
+/// paralelo: sin el tope, una discografía grande dispararía decenas de
+/// procesos a la vez y la API de YouTube cortaría. Devuelve, en el mismo
+/// orden de `releases`, las canciones de cada uno (o `None` si falló).
+fn fetch_release_tracks_parallel(releases: &[ReleaseItem]) -> Vec<Option<Vec<SearchHit>>> {
+    let max_parallel = 8usize;
+    let slots = std::sync::Mutex::new(max_parallel);
+    let condvar = std::sync::Condvar::new();
+    // Referencias a los locales de esta función: viven más que el scope, así
+    // que cada hilo puede tomar una copia (son Copy) sin mover el mutex.
+    let slots = &slots;
+    let condvar = &condvar;
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (index, _) in releases.iter().enumerate() {
+            let handle = scope.spawn(move || {
+                // Tomar un slot: esperar si ya hay `max_parallel` en vuelo.
+                {
+                    let mut free = slots.lock().unwrap();
+                    while *free == 0 {
+                        free = condvar.wait(free).unwrap();
+                    }
+                    *free -= 1;
+                }
+                let release = &releases[index];
+                // Las canciones de la LISTA del lanzamiento (audio/Topic, con
+                // la carátula del álbum); si la lista no se pudo leer, la
+                // página del lanzamiento como respaldo.
+                let tracks = if release.playlist_id.is_empty() {
+                    fetch_release_tracks(&release.browse_id)
+                } else {
+                    fetch_playlist_tracks(&release.playlist_id)
+                };
+                {
+                    let mut free = slots.lock().unwrap();
+                    *free += 1;
+                    condvar.notify_one();
+                }
+                (index, tracks)
+            });
+            handles.push(handle);
+        }
+        let mut out: Vec<Option<Vec<SearchHit>>> = vec![None; releases.len()];
+        for handle in handles {
+            if let Ok((index, tracks)) = handle.join() {
+                out[index] = tracks;
+            }
+        }
+        out
+    })
+}
+
+/// Intenta resolver la consulta como la discografía completa de un artista
+/// (álbumes con sus canciones en orden y los sencillos más recientes).
+/// `None` si la consulta no es un artista o si YouTube Music no colabora:
+/// ahí la búsqueda normal de canciones es el respaldo.
+fn artist_discography_sync(query: &str) -> Option<SearchResponse> {
+    let (artist_name, artist_id) = find_artist_browse_id(query)?;
+    let releases = fetch_discography(&artist_id);
+    if releases.is_empty() {
+        return None;
+    }
+    let singles_total = releases.iter().filter(|release| !release.is_album).count();
+    // Álbumes completos; sencillos hasta un tope razonable: cada sencillo es
+    // una petición aparte y una discografía gigante no debe tardar minutos
+    // ni saturar la API. `singles_total` avisa al frontend de cuántos hay.
+    const ALBUMS_LIMIT: usize = 40;
+    const SINGLES_LIMIT: usize = 40;
+    let albums: Vec<ReleaseItem> = releases
+        .iter()
+        .filter(|release| release.is_album)
+        .take(ALBUMS_LIMIT)
+        .cloned()
+        .collect();
+    let singles: Vec<ReleaseItem> = releases
+        .iter()
+        .filter(|release| !release.is_album)
+        .take(SINGLES_LIMIT)
+        .cloned()
+        .collect();
+    if albums.is_empty() && singles.is_empty() {
+        return None;
+    }
+    let targets: Vec<ReleaseItem> = albums.iter().chain(singles.iter()).cloned().collect();
+    let tracklists = fetch_release_tracks_parallel(&targets);
+    let mut album_groups: Vec<ArtistAlbum> = Vec::new();
+    let mut single_hits: Vec<SearchHit> = Vec::new();
+    for (index, release) in targets.iter().enumerate() {
+        let Some(tracks) = &tracklists[index] else {
+            continue;
+        };
+        if release.is_album {
+            album_groups.push(ArtistAlbum {
+                title: release.title.clone(),
+                year: release.year.clone(),
+                tracks: tracks.clone(),
+            });
+        } else {
+            // La fila de un sencillo no trae columna de artistas: se usa el
+            // nombre del artista de la consulta (el del canal oficial).
+            let mut hits = tracks.clone();
+            for hit in &mut hits {
+                if hit.artists.is_empty() {
+                    hit.artists.push(artist_name.clone());
+                }
+            }
+            single_hits.extend(hits);
+        }
+    }
+    if album_groups.is_empty() && single_hits.is_empty() {
+        return None;
+    }
+    Some(SearchResponse {
+        kind: "artist".to_string(),
+        songs: Vec::new(),
+        artist_name,
+        albums: album_groups,
+        singles: single_hits,
+        singles_total,
+    })
 }
 
 fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, String> {
@@ -4968,3 +5524,8 @@ mod ytdlp_update_tests {
         assert_eq!(a, unique_stem("https://example.com/cancion-uno"));
     }
 }
+
+
+
+
+
