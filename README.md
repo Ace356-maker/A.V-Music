@@ -1,4 +1,6 @@
-# 🎵 A.V Music — Reproductor de Música Local & Descargador (v0.5.14)
+# 🎵 A.V Music — Reproductor de Música Local & Descargador
+
+[![Descargar Última Versión](https://img.shields.io/github/v/release/Ace356-maker/A.V-Music?style=for-the-badge&logo=windows&logoColor=white&label=Descargar%20Instalador%20Windows&color=22c55e)](https://github.com/Ace356-maker/A.V-Music/releases/latest)
 
 > **Tu música, en tu disco.** **A.V Music** es un reproductor de escritorio de alto rendimiento: escanea tu biblioteca local en milisegundos con Rust, reproduce audio local con fluidez y te permite **buscar, resolver enlaces (YouTube Music y Spotify) y descargar canciones en MP3 de alta calidad con metadatos limpios y letras sincronizadas**, todo sin cuentas ni servicios en la nube.
 
@@ -6,11 +8,13 @@
 
 ## ⬇️ Descarga e Instalación
 
-Para instalar **A.V Music** en tu equipo sin necesidad de compilar código:
+[![Descargar Instalador .exe](https://img.shields.io/badge/Descargar_Instalador_.exe-Última_Versión-blue?style=for-the-badge&logo=github)](https://github.com/Ace356-maker/A.V-Music/releases/latest)
 
-1. Ve a la sección de **[Releases del repositorio](https://github.com/Ace356-maker/A.V-Music/releases/latest)**.
-2. Descarga el ejecutable para tu sistema (en Windows: `A.V.Music_x64-setup.exe` o `.msi`).
-3. Ejecuta el instalador. La aplicación se instalará y mantendrá actualizada de forma 100% automática en futuras versiones.
+Para instalar **A.V Music** en Windows:
+
+1. Haz clic en el botón de arriba o ve a los **[Releases del repositorio](https://github.com/Ace356-maker/A.V-Music/releases/latest)**.
+2. Descarga el ejecutable `A.V.Music_x.x.x_x64-setup.exe`.
+3. Ejecútalo. La aplicación se instalará y se mantendrá actualizada automáticamente en futuras versiones.
 
 ---
 
