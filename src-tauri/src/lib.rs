@@ -973,54 +973,213 @@ fn ytm_rows(endpoint: &str, body_tail: &str) -> Vec<serde_json::Value> {
     rows
 }
 
-/// Busca el id del canal oficial de un artista (UC…) y su nombre para una
-/// consulta: si el resultado principal de YT Music es un artista (tarjeta
-/// superior con `MUSIC_PAGE_TYPE_ARTIST`), lo devuelve; si no (una canción,
-/// una lista…), `None` y la búsqueda normal sigue su curso.
-fn find_artist_browse_id(query: &str) -> Option<(String, String)> {
+/// Un canal candidato a artista de una búsqueda: nombre, id de su página
+/// (UC…, el mismo que usa la página de discografía) y suscriptores (sirve
+/// para desempatar entre el canal Topic y el oficial cuando ambos traen la
+/// misma cantidad de lanzamientos).
+struct ArtistCandidate {
+    name: String,
+    browse_id: String,
+    subscribers: u64,
+}
+
+/// Reúne TODOS los canales candidatos a artista de una búsqueda, en orden
+/// de aparición y deduplicados por id: la tarjeta superior (la que rankea
+/// YouTube Music) y las filas de artista de los resultados. YT Music a veces
+/// pone un canal Topic automático como tarjeta (discografía parcial, p. ej.
+/// 11 lanzamientos) y deja el canal oficial como fila (con todos, 48):
+/// comparar candidatos permite quedarse con el de la discografía completa.
+/// Vacío si la consulta no resuelve a ningún artista.
+fn find_artist_candidates(query: &str) -> Vec<ArtistCandidate> {
+    const MAX_CANDIDATES: usize = 8;
     let body_tail = format!(
         r##""query":{},"params":"EgWKAQIIAWoKEAoQCRADEAA%3D""##,
-        serde_json::to_string(query).ok()?
+        serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_string())
     );
-    let json = ytm_api("search", &body_tail)?;
-    // La tarjeta principal: el título con browseEndpoint de artista es el
-    // nombre del artista y el browseId, su canal oficial.
-    fn walk(value: &serde_json::Value) -> Option<(String, String)> {
+    let Some(json) = ytm_api("search", &body_tail) else {
+        return Vec::new();
+    };
+    let mut out: Vec<ArtistCandidate> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    fn is_artist_page(endpoint: &serde_json::Value) -> bool {
+        endpoint
+            .pointer(
+                "/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType",
+            )
+            .and_then(|value| value.as_str())
+            == Some("MUSIC_PAGE_TYPE_ARTIST")
+    }
+    fn push(
+        out: &mut Vec<ArtistCandidate>,
+        seen: &mut std::collections::HashSet<String>,
+        name: &str,
+        browse_id: &str,
+        subscribers: u64,
+    ) {
+        let name = decode_html_entities(name);
+        if name.is_empty() || browse_id.is_empty() || !seen.insert(browse_id.to_string()) {
+            return;
+        }
+        out.push(ArtistCandidate {
+            name,
+            browse_id: browse_id.to_string(),
+            subscribers,
+        });
+    }
+    fn walk(
+        value: &serde_json::Value,
+        out: &mut Vec<ArtistCandidate>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
         match value {
             serde_json::Value::Object(map) => {
+                // Tarjeta superior de artista.
                 if let Some(card) = map.get("musicCardShelfRenderer") {
-                    let title = card.pointer("/title/runs/0/text")?.as_str()?;
-                    let endpoint = card.pointer("/title/runs/0/navigationEndpoint")?;
-                    let page_type = endpoint
-                        .pointer(
-                            "/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType",
-                        )?
-                        .as_str()?;
-                    if page_type == "MUSIC_PAGE_TYPE_ARTIST" {
-                        let browse_id = endpoint
-                            .pointer("/browseEndpoint/browseId")?
-                            .as_str()?;
-                        return Some((decode_html_entities(title), browse_id.to_string()));
+                    let title_run = card.pointer("/title/runs/0");
+                    let endpoint = title_run
+                        .and_then(|run| run.pointer("/navigationEndpoint"))
+                        .filter(|endpoint| is_artist_page(endpoint));
+                    if let Some(endpoint) = endpoint {
+                        if let (Some(name), Some(browse_id)) = (
+                            title_run
+                                .and_then(|run| run.pointer("/text"))
+                                .and_then(|value| value.as_str()),
+                            endpoint
+                                .pointer("/browseEndpoint/browseId")
+                                .and_then(|value| value.as_str()),
+                        ) {
+                            push(
+                                out,
+                                seen,
+                                name,
+                                browse_id,
+                                subscribers_from_subtitle(card.pointer("/subtitle")),
+                            );
+                        }
+                    }
+                }
+                // Fila de artista de los resultados (el canal oficial suele
+                // estar aquí cuando la tarjeta es un Topic).
+                if let Some(row) = map.get("musicResponsiveListItemRenderer") {
+                    if let Some(endpoint) = row.get("navigationEndpoint") {
+                        if is_artist_page(endpoint) {
+                            let name = row
+                                .pointer(
+                                    "/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text/runs/0/text",
+                                )
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("");
+                            let browse_id = endpoint
+                                .pointer("/browseEndpoint/browseId")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("");
+                            let subscribers = subscribers_from_subtitle(row.pointer(
+                                "/flexColumns/1/musicResponsiveListItemFlexColumnRenderer/text",
+                            ));
+                            push(out, seen, name, browse_id, subscribers);
+                        }
                     }
                 }
                 for child in map.values() {
-                    if let Some(found) = walk(child) {
-                        return Some(found);
-                    }
+                    walk(child, out, seen);
                 }
             }
             serde_json::Value::Array(items) => {
                 for child in items {
-                    if let Some(found) = walk(child) {
-                        return Some(found);
-                    }
+                    walk(child, out, seen);
                 }
             }
             _ => {}
         }
-        None
     }
-    walk(&json)
+    walk(&json, &mut out, &mut seen);
+    out.truncate(MAX_CANDIDATES);
+    out
+}
+
+/// ¿Coincide el nombre de un candidato a artista con la consulta? Se acepta
+/// si el nombre normalizado es igual, uno contiene al otro, o comparten al
+/// menos dos palabras de 3+ letras. Evita que una búsqueda ambigua se quede
+/// con la discografía de un artista distinto pero homónimo parcial (p. ej.
+/// "Jon Brennan" para "Brennan Story" solo comparte "brennan").
+fn artist_name_matches(query: &str, candidate: &str) -> bool {
+    let q = normalize(query);
+    let c = normalize(candidate);
+    if q.is_empty() || c.is_empty() {
+        return false;
+    }
+    if q == c || q.contains(&c) || c.contains(&q) {
+        return true;
+    }
+    let words = |input: &str| -> Vec<String> {
+        input
+            .to_lowercase()
+            .chars()
+            .map(deaccent)
+            .collect::<String>()
+            .split(|ch: char| !ch.is_alphanumeric())
+            .filter(|word| word.chars().count() >= 3)
+            .map(str::to_string)
+            .collect()
+    };
+    let q_words = words(query);
+    let c_words = words(candidate);
+    q_words.iter().filter(|word| c_words.contains(word)).count() >= 2
+}
+
+/// Extrae el número de suscriptores de un subtítulo de artista ("Artista •
+/// 22,3 K suscriptores" o "Artista • 31,7 M usuarios mensuales"). 0 si el
+/// subtítulo no lo trae.
+fn subscribers_from_subtitle(value: Option<&serde_json::Value>) -> u64 {
+    let Some(value) = value else {
+        return 0;
+    };
+    fn collect_text(value: &serde_json::Value, out: &mut String) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(text) = map.get("text").and_then(|value| value.as_str()) {
+                    out.push_str(text);
+                    return;
+                }
+                for child in map.values() {
+                    collect_text(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    collect_text(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut text = String::new();
+    collect_text(value, &mut text);
+    // Primer número ("22,3", "2,38", "31,7") con sufijo opcional K/M.
+    let Some(start) = text.find(|ch: char| ch.is_ascii_digit()) else {
+        return 0;
+    };
+    let tail = &text[start..];
+    let mut num = String::new();
+    for ch in tail.chars() {
+        if ch.is_ascii_digit() || ch == ',' || ch == '.' {
+            num.push(if ch == ',' { '.' } else { ch });
+        } else {
+            break;
+        }
+    }
+    let base = num.parse::<f64>().unwrap_or(0.0);
+    let suffix = tail[num.len()..]
+        .trim_start()
+        .chars()
+        .next()
+        .unwrap_or(' ');
+    let multiplier = match suffix {
+        'K' | 'k' => 1_000.0,
+        'M' | 'm' => 1_000_000.0,
+        _ => 1.0,
+    };
+    (base * multiplier) as u64
 }
 
 /// Un lanzamiento de la discografía de un artista (álbum o sencillo), tal
@@ -1051,9 +1210,13 @@ fn fetch_discography(artist_id: &str) -> Vec<ReleaseItem> {
     let mut releases = Vec::new();
     let mut pending = vec![json];
     let mut pages = 0;
+    // Páginas totales: la primera + hasta 2 extra (una discografía enorme
+    // no debe saturar la API; la mayoría de artistas cabe en la primera).
+    const MAX_PAGES: usize = 3;
     while let Some(current) = pending.pop() {
-        // Continuación: pedir la siguiente página de la discografía.
-        if pages > 0 {
+        // Continuación: cada página puede traer un token para la siguiente
+        // (la primera también), así que se busca en todas las páginas.
+        if pages + 1 < MAX_PAGES {
             let token = {
                 let mut found = None;
                 fn find_token(value: &serde_json::Value, found: &mut Option<String>) {
@@ -1082,16 +1245,16 @@ fn fetch_discography(artist_id: &str) -> Vec<ReleaseItem> {
                 find_token(&current, &mut found);
                 found
             };
-            let Some(token) = token else { break };
-            let Some(cont_tail) = serde_json::to_string(&token)
-                .ok()
-                .map(|encoded| format!(r##""continuation":{encoded}"##))
-            else {
-                break;
-            };
-            let Some(next) = ytm_api("browse", &cont_tail) else { break };
-            pending.push(next);
-            continue;
+            if let Some(token) = token {
+                let cont_tail = serde_json::to_string(&token)
+                    .ok()
+                    .map(|encoded| format!(r##""continuation":{encoded}"##));
+                if let Some(cont_tail) = cont_tail {
+                    if let Some(next) = ytm_api("browse", &cont_tail) {
+                        pending.push(next);
+                    }
+                }
+            }
         }
         // Recoger todos los `musicTwoRowItemRenderer` (cada uno es un
         // lanzamiento) en orden de aparición.
@@ -1336,22 +1499,135 @@ fn fetch_release_tracks_parallel(releases: &[ReleaseItem]) -> Vec<Option<Vec<Sea
     })
 }
 
+/// Discografía de cada candidato a artista en paralelo (cada una son pocas
+/// llamadas browse; los artistas con muchísimos lanzamientos siguen
+/// continuaciones). `None` si el candidato no trae lanzamientos.
+fn fetch_candidate_discographies(
+    candidates: &[ArtistCandidate],
+) -> Vec<Option<Vec<ReleaseItem>>> {
+    let max_parallel = 4usize;
+    let slots = std::sync::Mutex::new(max_parallel);
+    let condvar = std::sync::Condvar::new();
+    let slots = &slots;
+    let condvar = &condvar;
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (index, candidate) in candidates.iter().enumerate() {
+            let handle = scope.spawn(move || {
+                // Tomar un slot: esperar si ya hay `max_parallel` en vuelo.
+                {
+                    let mut free = slots.lock().unwrap();
+                    while *free == 0 {
+                        free = condvar.wait(free).unwrap();
+                    }
+                    *free -= 1;
+                }
+                let releases = fetch_discography(&candidate.browse_id);
+                {
+                    let mut free = slots.lock().unwrap();
+                    *free += 1;
+                    condvar.notify_one();
+                }
+                (index, releases)
+            });
+            handles.push(handle);
+        }
+        let mut out: Vec<Option<Vec<ReleaseItem>>> = vec![None; candidates.len()];
+        for handle in handles {
+            if let Ok((index, releases)) = handle.join() {
+                out[index] = (!releases.is_empty()).then_some(releases);
+            }
+        }
+        out
+    })
+}
+
 /// Intenta resolver la consulta como la discografía completa de un artista
 /// (álbumes con sus canciones en orden y los sencillos más recientes).
 /// `None` si la consulta no es un artista o si YouTube Music no colabora:
 /// ahí la búsqueda normal de canciones es el respaldo.
 fn artist_discography_sync(query: &str) -> Option<SearchResponse> {
-    let (artist_name, artist_id) = find_artist_browse_id(query)?;
-    let releases = fetch_discography(&artist_id);
+    // YouTube Music a veces rankea un canal Topic automático por encima del
+    // canal oficial, y además puede REPARTIR el catálogo entre ambos (p. ej.
+    // Brennan Story: el Topic guarda el álbum "Smoke Break" y los sencillos
+    // de 2020-2023; el oficial el resto). Si todos los candidatos son el
+    // mismo artista se FUSIONAN sus discografías; si hay nombres distintos
+    // (consulta ambigua) gana el canal con más lanzamientos (empate → más
+    // suscriptores).
+    const MAX_CANDIDATES: usize = 4;
+    let candidates: Vec<ArtistCandidate> = find_artist_candidates(query)
+        .into_iter()
+        .filter(|candidate| artist_name_matches(query, &candidate.name))
+        .take(MAX_CANDIDATES)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let discographies = fetch_candidate_discographies(&candidates);
+    let same_artist = candidates
+        .iter()
+        .map(|candidate| normalize(&candidate.name))
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        == 1;
+    let (mut releases, artist_name) = if same_artist {
+        // Unión deduplicada por (título normalizado, año): un lanzamiento
+        // presente en dos canales solo cuenta una vez.
+        let mut merged: Vec<ReleaseItem> = Vec::new();
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for disc in discographies.iter().flatten() {
+            for release in disc {
+                if seen.insert((normalize(&release.title), release.year.clone())) {
+                    merged.push(release.clone());
+                }
+            }
+        }
+        (merged, candidates[0].name.clone())
+    } else {
+        let mut best: Option<usize> = None;
+        for index in 0..candidates.len() {
+            let Some(releases) = &discographies[index] else {
+                continue;
+            };
+            let better = match best {
+                None => true,
+                Some(current) => {
+                    let current_len = discographies[current].as_ref().map_or(0, Vec::len);
+                    let current_subs = candidates[current].subscribers;
+                    releases.len() > current_len
+                        || (releases.len() == current_len
+                            && candidates[index].subscribers > current_subs)
+                }
+            };
+            if better {
+                best = Some(index);
+            }
+        }
+        let best_index = best?;
+        (
+            discographies[best_index].clone().unwrap_or_default(),
+            candidates[best_index].name.clone(),
+        )
+    };
     if releases.is_empty() {
         return None;
     }
+    // Más recientes primero (año vacío al final); dentro del mismo año,
+    // alfabético para que el orden sea estable al fusionar canales.
+    releases.sort_by(|a, b| {
+        let year_a = a.year.parse::<u32>().unwrap_or(0);
+        let year_b = b.year.parse::<u32>().unwrap_or(0);
+        year_b
+            .cmp(&year_a)
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+    });
     let singles_total = releases.iter().filter(|release| !release.is_album).count();
     // Álbumes completos; sencillos hasta un tope razonable: cada sencillo es
     // una petición aparte y una discografía gigante no debe tardar minutos
     // ni saturar la API. `singles_total` avisa al frontend de cuántos hay.
-    const ALBUMS_LIMIT: usize = 40;
-    const SINGLES_LIMIT: usize = 40;
+    const ALBUMS_LIMIT: usize = 60;
+    const SINGLES_LIMIT: usize = 60;
     let albums: Vec<ReleaseItem> = releases
         .iter()
         .filter(|release| release.is_album)
@@ -2442,21 +2718,26 @@ fn decode_ytdlp(bytes: &[u8]) -> String {
 
 /// Normaliza texto para comparar sin tildes ni mayúsculas (búsqueda de
 /// letras y de versiones Topic): minúsculas, sin acentos y sin espacios.
+/// Normaliza un carácter para comparaciones sin tildes ni mayúsculas.
+fn deaccent(ch: char) -> char {
+    match ch {
+        'á' | 'à' | 'ä' => 'a',
+        'é' | 'è' | 'ë' => 'e',
+        'í' | 'ì' | 'ï' => 'i',
+        'ó' | 'ò' | 'ö' => 'o',
+        'ú' | 'ù' | 'ü' => 'u',
+        'ñ' => 'n',
+        'ç' => 'c',
+        other => other,
+    }
+}
+
 fn normalize(input: &str) -> String {
     input
         .chars()
         .filter(|c| !c.is_whitespace())
         .flat_map(char::to_lowercase)
-        .map(|c| match c {
-            'á' | 'à' | 'ä' => 'a',
-            'é' | 'è' | 'ë' => 'e',
-            'í' | 'ì' | 'ï' => 'i',
-            'ó' | 'ò' | 'ö' => 'o',
-            'ú' | 'ù' | 'ü' => 'u',
-            'ñ' => 'n',
-            'ç' => 'c',
-            other => other,
-        })
+        .map(deaccent)
         .collect()
 }
 
@@ -5529,3 +5810,87 @@ mod ytdlp_update_tests {
 
 
 
+
+/// Pruebas de la resolución de artista por candidatos (comparación de
+/// discografías para quedarse con el canal oficial). Las que usan la API de
+/// YouTube Music van con `#[ignore]` y corren con `cargo test -- --ignored`.
+#[cfg(test)]
+mod artist_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn artist_name_matches_accepts_exact_and_partial() {
+        assert!(artist_name_matches("Brennan Story", "Brennan Story"));
+        assert!(artist_name_matches("brennan story", "Brennan Story"));
+        assert!(artist_name_matches("Brennan", "Brennan Story"));
+        assert!(artist_name_matches("The Weeknd", "The Weeknd"));
+        assert!(artist_name_matches("kendrick", "Kendrick Lamar"));
+        // Homónimo parcial: solo comparte una palabra, no debe pasar.
+        assert!(!artist_name_matches("Brennan Story", "Jon Brennan"));
+        // Artistas distintos del todo.
+        assert!(!artist_name_matches("Brennan Story", "King Von"));
+        assert!(!artist_name_matches("Lil Story rapper", "King Von"));
+        assert!(!artist_name_matches("Lil Story rapper", "Lil Wayne"));
+        // Vacíos nunca coinciden.
+        assert!(!artist_name_matches("", "Brennan Story"));
+        assert!(!artist_name_matches("Brennan Story", ""));
+    }
+
+    #[test]
+    fn subscribers_parse_spanish_subtitles() {
+        let sub = serde_json::json!({
+            "runs": [{"text": "Artista • "}, {"text": "22,3 K "}, {"text": "suscriptores"}]
+        });
+        assert_eq!(subscribers_from_subtitle(Some(&sub)), 22_300);
+        let sub = serde_json::json!({
+            "runs": [{"text": "Artista • "}, {"text": "2,38 K "}, {"text": "suscriptores"}]
+        });
+        assert_eq!(subscribers_from_subtitle(Some(&sub)), 2_380);
+        let sub = serde_json::json!({
+            "runs": [{"text": "Artista • "}, {"text": "31,7 M "}, {"text": "usuarios mensuales"}]
+        });
+        assert_eq!(subscribers_from_subtitle(Some(&sub)), 31_700_000);
+        // Sin subtítulo o sin número: 0.
+        assert_eq!(subscribers_from_subtitle(None), 0);
+        assert_eq!(subscribers_from_subtitle(Some(&serde_json::json!({}))), 0);
+    }
+
+    /// Regresión real: buscar "Brennan Story" debe devolver la discografía
+    /// COMPLETA, fusionando el canal Topic (álbum "Smoke Break" + sencillos
+    /// de 2020-2023) y el canal oficial (era Lil Story 2019-2021 y lo nuevo
+    /// hasta 2026). Corre con `cargo test -- --ignored` porque usa la API.
+    #[test]
+    #[ignore]
+    fn brennan_story_discography_includes_album_and_lil_story_era() {
+        let resp = artist_discography_sync("Brennan Story")
+            .expect("debe resolver a artista");
+        assert_eq!(resp.kind, "artist");
+        assert_eq!(resp.artist_name, "Brennan Story");
+        eprintln!(
+            "{} álbumes, {} sencillos mostrados (de {} total)",
+            resp.albums.len(),
+            resp.singles.len(),
+            resp.singles_total
+        );
+        // El álbum vive en el canal Topic: debe entrar vía fusión.
+        assert!(
+            resp.albums.iter().any(|album| album.title == "Smoke Break"),
+            "el álbum 'Smoke Break' debe estar en la discografía"
+        );
+        // Sencillos de la era Lil Story (canal oficial) y del Topic (2020-23).
+        let titles: Vec<&str> = resp.singles.iter().map(|hit| hit.title.as_str()).collect();
+        assert!(
+            titles.iter().any(|title| title.eq_ignore_ascii_case("Double Take")),
+            "deben venir los sencillos de la era Lil Story (Double Take)"
+        );
+        assert!(
+            titles.iter().any(|title| title.eq_ignore_ascii_case("Twin flame")),
+            "deben venir los sencillos del canal Topic (Twin flame)"
+        );
+        assert!(
+            resp.singles.len() >= 50,
+            "la unión debe cubrir ~58 sencillos, no solo los 48 del oficial: {}",
+            resp.singles.len()
+        );
+    }
+}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { IconFolderOpen, IconMusic, IconPlayerPauseFilled, IconPlayerPlayFilled } from "@tabler/icons-react";
 
 import { Button } from "@/components/ui/Button";
@@ -7,6 +7,7 @@ import { TrackCover } from "@/components/ui/TrackCover";
 import { VirtualList } from "@/components/ui/VirtualList";
 import { cn } from "@/lib/cn";
 import { formatDuration } from "@/lib/format";
+import type { Track } from "@/types";
 import { libraryStore, useLibrary } from "@/features/library/libraryStore";
 import { usePlayer } from "@/features/player/playerStore";
 
@@ -38,6 +39,68 @@ export default function LibraryPage() {
   // virtualizada recibe el índice inicial; solo scrollea si quedó fuera de
   // vista, no salta si ya se ve).
   const currentIndex = current ? tracks.findIndex((track) => track.id === current.id) : -1;
+
+  // Estable entre renders: solo cambia si cambia la pista actual o el estado
+  // de reproducción, nunca con cada scroll — así las filas memorizadas de la
+  // lista virtualizada no se re-renderizan mientras haces scroll.
+  const renderTrack = useCallback(
+    (track: Track, index: number) => {
+      const isCurrent = current?.id === track.id;
+      return (
+        <button
+          type="button"
+          onClick={() => libraryStore.playTrack(track.id)}
+          className={cn(
+            "grid h-full w-full grid-cols-[2rem_1fr_10rem_4.5rem_2.5rem] items-center gap-3 px-4 py-2.5 text-left",
+            isCurrent && "bg-accent-soft",
+          )}
+        >
+          <span className="text-right font-mono text-xs text-faint">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <span className="flex min-w-0 items-center gap-3">
+            <TrackCover track={track} className="h-9 w-9 rounded-sm" />
+            <span className="min-w-0">
+              <span className="flex min-w-0 items-center gap-2">
+                {/* Misma estructura y misma clase activa o no: al enfocar
+                    la fila no cambia nada del layout — solo arranca el
+                    deslizamiento si desborda. */}
+                <SlideTitle
+                  text={track.title}
+                  active={isCurrent}
+                  className="text-sm font-medium text-ink"
+                />
+                {variantLabel(track.title) && (
+                  <span className="inline-flex shrink-0 items-center self-center rounded-sm bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
+                    {variantLabel(track.title)}
+                  </span>
+                )}
+              </span>
+              <span className="block truncate text-xs text-muted">
+                {track.artist ?? "Artista desconocido"}
+              </span>
+            </span>
+          </span>
+          {/* Metadatos incompletos: sin álbum se muestra el título de la
+              canción en vez de un guion vacío. */}
+          <span className="truncate text-xs text-muted">
+            {track.album?.trim() ? track.album : track.title}
+          </span>
+          <span className="text-right font-mono text-xs text-faint">
+            {formatDuration(track.durationSec)}
+          </span>
+          <span className="flex justify-end">
+            {isCurrent && isPlaying ? (
+              <IconPlayerPauseFilled aria-hidden="true" size={18} stroke={1.5} className="text-accent" />
+            ) : (
+              <IconPlayerPlayFilled aria-hidden="true" size={18} stroke={1.5} className="text-faint" />
+            )}
+          </span>
+        </button>
+      );
+    },
+    [current?.id, isPlaying],
+  );
 
   async function handleImport(): Promise<void> {
     setScanning(true);
@@ -102,61 +165,7 @@ export default function LibraryPage() {
           getKey={(track) => track.id}
           initialScrollIndex={currentIndex >= 0 ? currentIndex : undefined}
           className="min-h-0 flex-1 overflow-y-auto rounded-sm"
-          renderItem={(track, index) => {
-            const isCurrent = current?.id === track.id;
-            return (
-              <button
-                type="button"
-                onClick={() => libraryStore.playTrack(track.id)}
-                className={cn(
-                  "grid h-full w-full grid-cols-[2rem_1fr_10rem_4.5rem_2.5rem] items-center gap-3 px-4 py-2.5 text-left",
-                  isCurrent && "bg-accent-soft",
-                )}
-              >
-                <span className="text-right font-mono text-xs text-faint">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <span className="flex min-w-0 items-center gap-3">
-                  <TrackCover track={track} className="h-9 w-9 rounded-sm" />
-                  <span className="min-w-0">
-                    <span className="flex min-w-0 items-center gap-2">
-                      {/* Misma estructura y misma clase activa o no: al
-                          enfocar la fila no cambia nada del layout —
-                          solo arranca el deslizamiento si desborda. */}
-                      <SlideTitle
-                        text={track.title}
-                        active={isCurrent}
-                        className="text-sm font-medium text-ink"
-                      />
-                      {variantLabel(track.title) && (
-                        <span className="inline-flex shrink-0 items-center self-center rounded-sm bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
-                          {variantLabel(track.title)}
-                        </span>
-                      )}
-                    </span>
-                    <span className="block truncate text-xs text-muted">
-                      {track.artist ?? "Artista desconocido"}
-                    </span>
-                  </span>
-                </span>
-                {/* Metadatos incompletos: sin álbum se muestra el título de
-                    la canción en vez de un guion vacío. */}
-                <span className="truncate text-xs text-muted">
-                  {track.album?.trim() ? track.album : track.title}
-                </span>
-                <span className="text-right font-mono text-xs text-faint">
-                  {formatDuration(track.durationSec)}
-                </span>
-                <span className="flex justify-end">
-                  {isCurrent && isPlaying ? (
-                    <IconPlayerPauseFilled aria-hidden="true" size={18} stroke={1.5} className="text-accent" />
-                  ) : (
-                    <IconPlayerPlayFilled aria-hidden="true" size={18} stroke={1.5} className="text-faint" />
-                  )}
-                </span>
-              </button>
-            );
-          }}
+          renderItem={renderTrack}
         />
       )}
 

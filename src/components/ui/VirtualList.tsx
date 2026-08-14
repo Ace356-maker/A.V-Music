@@ -1,4 +1,6 @@
 import {
+  memo,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -14,6 +16,11 @@ import {
  *
  * Las filas deben tener ALTO FIJO (`rowHeight`) — contenido truncado, sin
  * wrap — para que el cálculo del ventaneo sea exacto.
+ *
+ * Rendimiento: el scroll se alinea al fotograma (requestAnimationFrame) y
+ * las filas están memorizadas, así que con un `renderItem` estable
+ * (useCallback en el padre) cada fotograma solo re-renderiza las filas que
+ * entran/salen de la ventana, no todas las visibles.
  */
 
 interface VirtualListProps<T> {
@@ -32,6 +39,21 @@ interface VirtualListProps<T> {
   resetOnItemsChange?: boolean;
 }
 
+/** Fila memorizada: con `renderItem` estable, al hacer scroll solo se
+ * re-renderizan las filas cuya pista cambió, no toda la ventana visible.
+ * memo + genérico: el elenco explícito mantiene la firma genérica. */
+const MemoRow = memo(function MemoRow(props: {
+  item: unknown;
+  index: number;
+  renderItem: (item: unknown, index: number) => ReactNode;
+}) {
+  return props.renderItem(props.item, props.index);
+}) as unknown as <T>(props: {
+  item: T;
+  index: number;
+  renderItem: (item: T, index: number) => ReactNode;
+}) => ReactNode;
+
 export function VirtualList<T>({
   items,
   rowHeight,
@@ -45,6 +67,26 @@ export function VirtualList<T>({
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
+
+  // El scroll se alinea al fotograma: los eventos de scroll pueden llegar
+  // varias veces por frame y no vale la pena re-renderizar más que una.
+  const latestTopRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const handleScroll = (event: React.UIEvent<HTMLDivElement>): void => {
+    latestTopRef.current = event.currentTarget.scrollTop;
+    if (rafRef.current == null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        setScrollTop(latestTopRef.current);
+      });
+    }
+  };
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    },
+    [],
+  );
 
   // Medir el alto del contenedor (y al redimensionar la ventana).
   useLayoutEffect(() => {
@@ -94,7 +136,7 @@ export function VirtualList<T>({
   return (
     <div
       ref={containerRef}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      onScroll={handleScroll}
       className={className}
     >
       <div style={{ position: "relative", height: items.length * rowHeight }}>
@@ -109,7 +151,7 @@ export function VirtualList<T>({
               height: rowHeight,
             }}
           >
-            {renderItem(items[index], index)}
+            <MemoRow item={items[index]} index={index} renderItem={renderItem} />
           </div>
         ))}
       </div>

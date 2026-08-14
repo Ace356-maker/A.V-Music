@@ -119,6 +119,37 @@ function variantLabel(title: string): string | null {
 }
 
 /**
+ * ¿Coincide un artista de la biblioteca con los intérpretes de un resultado?
+ * Exacto normalizado, uno contenido en el otro, o ≥2 palabras de 3+ letras
+ * en común. Así "Brennan Story" no colisiona con "Connor Kaufman" solo por
+ * compartir título, pero una descarga etiquetada "Lil Story, Brennan Andrew
+ * Story" sigue reconociéndose como "Brennan Story".
+ */
+function artistsMatch(libraryArtist: string, hitArtists: string[]): boolean {
+  const words = (text: string): Set<string> =>
+    new Set(
+      normalize(text)
+        .split(/[^a-z0-9]+/)
+        .filter((word) => word.length >= 3),
+    );
+  const a = normalize(libraryArtist);
+  if (!a) return false;
+  const aWords = words(libraryArtist);
+  return hitArtists.some((hit) => {
+    const b = normalize(hit);
+    if (!b) return false;
+    if (a === b || a.includes(b) || b.includes(a)) return true;
+    const bWords = words(hit);
+    let shared = 0;
+    for (const word of aWords) {
+      if (bWords.has(word)) shared += 1;
+      if (shared >= 2) return true;
+    }
+    return false;
+  });
+}
+
+/**
  * Búsqueda y descarga de música sin cuenta (yt-dlp por detrás). Los
  * resultados llegan de YouTube Music (pestaña de canciones, sin vídeos);  * al descargar, el audio cae en Descargas/A.V Music como MP3 con metadatos,
  * carátula del álbum y letra incrustadas en el archivo, y se fusiona con
@@ -154,16 +185,40 @@ export default function SearchPage() {
   const batchProgress = downloads.batch;
   const batchStatus = batchProgress ? batchProgress.status : {};
 
-  // Títulos de la biblioteca (normalizados): una descarga previa —o la
-  // versión Topic elegida al descargar— puede tener otro id de vídeo, así
-  // que el título es la señal fiable de "ya la tengo descargada".
+  // Biblioteca por título normalizado con sus artistas: una descarga previa
+  // —o la versión Topic elegida al descargar— puede tener otro id de vídeo,
+  // pero el título NO basta para marcar "ya la tengo": dos artistas pueden
+  // tener canciones con el mismo nombre (p. ej. "Heartless" de Connor
+  // Kaufman y de Brennan Story). Con artista conocido se exige que también
+  // coincida; solo se acepta por título cuando no hay intérpretes.
   const tracks = useLibrary();
-  const libraryTitles = useMemo(
-    () => new Set(tracks.map((track) => normalize(track.title))),
-    [tracks],
-  );
-  const isInLibrary = (hit: SearchHit): boolean =>
-    Boolean(downloaded[hit.id]) || libraryTitles.has(normalize(hit.title));
+  const libraryByTitle = useMemo(() => {
+    const map = new Map<string, { artists: string[]; hasNullArtist: boolean }>();
+    for (const track of tracks) {
+      const title = normalize(track.title);
+      let entry = map.get(title);
+      if (!entry) {
+        entry = { artists: [], hasNullArtist: false };
+        map.set(title, entry);
+      }
+      if (track.artist) {
+        entry.artists.push(track.artist);
+      } else {
+        entry.hasNullArtist = true;
+      }
+    }
+    return map;
+  }, [tracks]);
+  const isInLibrary = (hit: SearchHit): boolean => {
+    if (downloaded[hit.id]) return true;
+    const entry = libraryByTitle.get(normalize(hit.title));
+    if (!entry) return false;
+    const hitArtists = hit.artists ?? [];
+    // Sin intérpretes en el resultado no hay con qué confirmar el artista:
+    // queda la señal por título (y una pista sin artista en biblioteca).
+    if (hitArtists.length === 0 || entry.hasNullArtist) return true;
+    return entry.artists.some((artist) => artistsMatch(artist, hitArtists));
+  };
 
   /** Quita de la lista las descargas cuyo archivo ya no existe en disco. */
   const validateDownloaded = useCallback(async (): Promise<void> => {

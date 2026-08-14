@@ -1,5 +1,6 @@
 import {
   Fragment,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -24,12 +25,13 @@ import {
 } from "@tabler/icons-react";
 import { invoke } from "@tauri-apps/api/core";
 
-import type { LyricsVariants } from "@/types";
+import type { LyricsVariants, Track } from "@/types";
 import { cn } from "@/lib/cn";
 import { RangeSlider } from "@/components/ui/RangeSlider";
 import { CoverCrossfade } from "@/components/ui/CoverCrossfade";
 import { SlideTitle } from "@/components/ui/SlideTitle";
 import { TrackCover } from "@/components/ui/TrackCover";
+import { VirtualList } from "@/components/ui/VirtualList";
 import { VolumeIcon } from "@/components/ui/VolumeIcon";
 import { formatDuration } from "@/lib/format";
 import { parseLyrics, type LrcLine } from "@/lib/lrc";
@@ -44,6 +46,10 @@ const SOURCE_LABELS: Record<string, string> = {
   ytmusic: "YouTube Music",
   musixmatch: "Musixmatch",
 };
+
+/** Alto de cada fila de la cola (contenido 36 px + py-3 24 px + el hueco
+ * de 2 px entre filas, que entra dentro del alto para el ventaneo exacto). */
+const QUEUE_ROW_HEIGHT = 62;
 
 /** Cuánto respetar el scroll manual de la letra antes de volver al centro. */
 const USER_SCROLL_GRACE_MS = 2500;
@@ -650,32 +656,119 @@ export function FullPlayer({
   }
 
   // --- Reordenar la cola con arrastrar y soltar ---
+  // useCallback para que `renderQueueItem` (la fila de la cola) no cambie
+  // con cada tick de posición (200 ms) y las filas memorizadas no se
+  // re-rendericen mientras solo avanza la reproducción.
 
-  function handleQueueDragStart(event: DragEvent<HTMLLIElement>, index: number): void {
-    // Firefox exige datos en dataTransfer para iniciar el arrastre.
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", String(index));
-    setDragIndex(index);
-  }
+  const handleQueueDragStart = useCallback(
+    (event: DragEvent<HTMLElement>, index: number): void => {
+      // Firefox exige datos en dataTransfer para iniciar el arrastre.
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", String(index));
+      setDragIndex(index);
+    },
+    [],
+  );
 
-  function handleQueueDragOver(event: DragEvent<HTMLLIElement>, index: number): void {
-    event.preventDefault(); // necesario para permitir soltar aquí
-    if (index !== overIndex) setOverIndex(index);
-  }
+  const handleQueueDragOver = useCallback(
+    (event: DragEvent<HTMLElement>, index: number): void => {
+      event.preventDefault(); // necesario para permitir soltar aquí
+      setOverIndex((current) => (current === index ? current : index));
+    },
+    [],
+  );
 
-  function handleQueueDrop(event: DragEvent<HTMLLIElement>, index: number): void {
-    event.preventDefault();
-    if (dragIndex !== null && dragIndex !== index) {
-      playerStore.moveTrack(dragIndex, index);
-    }
+  const handleQueueDrop = useCallback(
+    (event: DragEvent<HTMLElement>, index: number): void => {
+      event.preventDefault();
+      if (dragIndex !== null && dragIndex !== index) {
+        playerStore.moveTrack(dragIndex, index);
+      }
+      setDragIndex(null);
+      setOverIndex(null);
+    },
+    [dragIndex],
+  );
+
+  const handleQueueDragEnd = useCallback((): void => {
     setDragIndex(null);
     setOverIndex(null);
-  }
+  }, []);
 
-  function handleQueueDragEnd(): void {
-    setDragIndex(null);
-    setOverIndex(null);
-  }
+  // La fila de la cola: depende solo de lo que cambia con la interacción
+  // (pista actual, arrastre) — nunca de la posición/duración que se
+  // sincronizan cada 200 ms — para que al reproducir no se re-renderice.
+  const currentIndex = current ? queue.findIndex((track) => track.id === current.id) : -1;
+  const renderQueueItem = useCallback(
+    (track: Track, index: number) => {
+      const isCurrent = current?.id === track.id;
+      const isDropTarget = overIndex === index && dragIndex !== null && dragIndex !== index;
+      return (
+        <div
+          draggable
+          onDragStart={(event) => handleQueueDragStart(event, index)}
+          onDragOver={(event) => handleQueueDragOver(event, index)}
+          onDrop={(event) => handleQueueDrop(event, index)}
+          onDragEnd={handleQueueDragEnd}
+          className={cn(
+            "h-full cursor-grab active:cursor-grabbing",
+            dragIndex === index && "opacity-40",
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => playerStore.playTrack(track, queue)}
+            className={cn(
+              "flex h-full w-full items-center gap-3 px-5 text-left transition-colors duration-150",
+              isCurrent && "bg-accent-soft",
+              isDropTarget && "bg-rule",
+            )}
+          >
+            <span
+              className={cn(
+                "w-6 shrink-0 text-right font-mono text-xs tabular-nums",
+                isCurrent ? "text-accent" : "text-faint",
+              )}
+            >
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <TrackCover track={track} className="h-9 w-9 rounded-sm" />
+            <span className="min-w-0 flex-1">
+              {/* Misma estructura y misma clase activa o no: al enfocar la
+                  fila no cambia nada del layout — solo arranca el
+                  deslizamiento si desborda. */}
+              <SlideTitle
+                text={track.title}
+                active={isCurrent}
+                className="text-sm font-medium text-ink"
+              />
+              <span className="block truncate text-xs text-muted">
+                {track.artist ?? "Artista desconocido"}
+              </span>
+            </span>
+            <span
+              className={cn(
+                "shrink-0 font-mono text-[11px] tabular-nums",
+                isCurrent ? "text-accent" : "text-faint",
+              )}
+            >
+              {formatDuration(track.durationSec)}
+            </span>
+          </button>
+        </div>
+      );
+    },
+    [
+      queue,
+      current?.id,
+      dragIndex,
+      overIndex,
+      handleQueueDragStart,
+      handleQueueDragOver,
+      handleQueueDrop,
+      handleQueueDragEnd,
+    ],
+  );
 
   const shownPosition = scrub ?? position;
   const shownDuration = duration || current?.durationSec || 0;
@@ -1088,67 +1181,14 @@ export function FullPlayer({
               Cola de reproducción
             </p>
           </div>
-          <ul className="flex-1 space-y-0.5 overflow-y-auto py-2">
-            {queue.map((track, index) => {
-              const isCurrent = current?.id === track.id;
-              const isDropTarget = overIndex === index && dragIndex !== null && dragIndex !== index;
-              return (
-                <li
-                  key={track.id}
-                  draggable
-                  onDragStart={(event) => handleQueueDragStart(event, index)}
-                  onDragOver={(event) => handleQueueDragOver(event, index)}
-                  onDrop={(event) => handleQueueDrop(event, index)}
-                  onDragEnd={handleQueueDragEnd}
-                  className={cn(
-                    "cursor-grab active:cursor-grabbing",
-                    dragIndex === index && "opacity-40",
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() => playerStore.playTrack(track, queue)}
-                    className={cn(
-                      "flex w-full items-center gap-3 px-5 py-3 text-left transition-colors duration-150",
-                      isCurrent && "bg-accent-soft",
-                      isDropTarget && "bg-rule",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "w-6 shrink-0 text-right font-mono text-xs tabular-nums",
-                        isCurrent ? "text-accent" : "text-faint",
-                      )}
-                    >
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
-                    <TrackCover track={track} className="h-9 w-9 rounded-sm" />
-                    <span className="min-w-0 flex-1">
-                      {/* Misma estructura y misma clase activa o no: al
-                          enfocar la fila no cambia nada del layout — solo
-                          arranca el deslizamiento si desborda. */}
-                      <SlideTitle
-                        text={track.title}
-                        active={isCurrent}
-                        className="text-sm font-medium text-ink"
-                      />
-                      <span className="block truncate text-xs text-muted">
-                        {track.artist ?? "Artista desconocido"}
-                      </span>
-                    </span>
-                    <span
-                      className={cn(
-                        "shrink-0 font-mono text-[11px] tabular-nums",
-                        isCurrent ? "text-accent" : "text-faint",
-                      )}
-                    >
-                      {formatDuration(track.durationSec)}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <VirtualList
+            items={queue}
+            rowHeight={QUEUE_ROW_HEIGHT}
+            getKey={(track) => track.id}
+            initialScrollIndex={currentIndex >= 0 ? currentIndex : undefined}
+            className="flex-1 overflow-y-auto py-2"
+            renderItem={renderQueueItem}
+          />
 
           {/* Sección dividida: volumen + karaoke (mic), dentro de la cola,
               centrados a lo ancho para que se sientan mejor */}
