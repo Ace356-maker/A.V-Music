@@ -86,3 +86,22 @@ jobs:
           prerelease: false
           # Genera y adjunta `latest.json` (el manifiesto que consulta la app).
           includeUpdaterJson: true
+
+      - name: Limpiar assets (dejar solo el instalador .exe)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Obtiene el tag actual o la última release
+          TAG_NAME="v$(node -p "require('./package.json').version")"
+          echo "Buscando release para el tag: $TAG_NAME"
+          
+          # Si la release ya se creó, eliminar los archivos .sig, .msi, latest.json si no quieres que aparezcan
+          # NOTA: Si quieres mantener el ejecutable .exe únicamente:
+          gh release view "$TAG_NAME" --json assets --jq '.assets[].name' | while read -r asset; do
+            if [[ "$asset" != *".exe" ]]; then
+              echo "Eliminando asset no deseado: $asset"
+              gh release delete-asset "$TAG_NAME" "$asset" -y || true
+            fi
+          done
+
