@@ -2,13 +2,17 @@ import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/cn";
 
-/** Duración del fundido de salida (debe coincidir con transition-opacity). */
-const FADE_MS = 500;
+import { BlackHoleBackground } from "./BlackHoleBackground";
+
+/** Duración del fundido de salida (debe coincidir con la transición). */
+const FADE_MS = 600;
 
 /**
- * Pantalla de carga al abrir la app: el logo en grande sobre el lienzo
- * oscuro, con una barra que cruza — nada de fondo negro pelado mientras
- * arranca. Cubre todo el arranque y se desvanece al estar lista.
+ * Pantalla de carga al abrir la app: usa EXACTAMENTE el mismo fondo del
+ * agujero negro que la app (video + scrim + estrellas) — solo el fondo,
+ * sin logo ni barra de progreso (se quitaron por pedido del usuario). Al
+ * terminar de cargar se desvanece (fade de 600 ms) y deja pasar a la app:
+ * como el fondo es el mismo, la transición es un fundido sin corte.
  */
 export function SplashScreen({ show }: { show: boolean }) {
   const [mounted, setMounted] = useState(true);
@@ -27,20 +31,14 @@ export function SplashScreen({ show }: { show: boolean }) {
     <div
       aria-hidden={!show}
       className={cn(
-        "fixed inset-0 z-[100] flex flex-col items-center justify-center gap-6 bg-canvas transition-opacity duration-500 ease-out",
+        "fixed inset-0 z-[100] overflow-hidden bg-canvas transition-opacity duration-[600ms] ease-out",
         show ? "opacity-100" : "pointer-events-none opacity-0",
       )}
     >
-      {/* Logo en grande sobre el lienzo oscuro */}
-      <img
-        src="/logo.png"
-        alt="A.V Music"
-        draggable={false}
-        className="h-32 select-none object-contain"
-      />
-      <div className="mt-1 h-0.5 w-40 overflow-hidden rounded-full bg-rule">
-        <div className="bar-indeterminate h-full w-1/3" />
-      </div>
+      {/* El MISMO fondo del agujero negro de la app: al desvanecerse, se
+          funde con la app sin corte. */}
+      <BlackHoleBackground />
+
     </div>
   );
 }

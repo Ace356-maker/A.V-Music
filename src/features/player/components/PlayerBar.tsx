@@ -195,7 +195,10 @@ export function PlayerBar() {
 
       {/* Controles + progreso */}
       <div className="flex flex-1 flex-col items-center gap-1.5">
-        <div className="flex items-center gap-5">
+        {/* El transporte queda CENTRADO como antes: el mic vive FUERA del
+            flujo (absolute), anclado a la derecha de repetir — así se
+            aleja de él sin mover los demás botones. */}
+        <div className="relative flex items-center gap-5">
           <button
             type="button"
             onClick={() => playerStore.toggleShuffle()}
@@ -276,9 +279,9 @@ export function PlayerBar() {
             )}
           </button>
 
-          {/* Karaoke: pegado a repetir pero con un hueco claro (ml-4) para
-              que se entienda que es OTRA cosa — el micrófono abre las
-              letras. Mismo efecto que el play/pausa. */}
+          {/* Karaoke: fuera del flujo (absolute), a la derecha de repetir
+              con un hueco amplio — el micrófono abre las letras. Mismo
+              efecto que el play/pausa. */}
           <button
             type="button"
             onClick={openLyrics}
@@ -288,7 +291,7 @@ export function PlayerBar() {
             // Glow BLANCO cuando está ACTIVO (como el play): el brillo solo
             // aparece al usarlo, no en reposo.
             className={cn(
-              "ml-4 flex items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-40",
+              "absolute left-full top-1/2 ml-12 flex -translate-y-1/2 items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-40",
               lyricsOn
                 ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
                 : "text-muted",
@@ -320,8 +323,7 @@ export function PlayerBar() {
         </div>
       </div>
 
-      {/* Volumen (el mic/karaoke vive ahora en el transporte, a la derecha
-          de repetir, separado para que se lea como otra función) */}
+      {/* Volumen */}
       <div className="flex w-64 shrink-0 items-center justify-end gap-3">
         <button
           type="button"

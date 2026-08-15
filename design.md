@@ -8,11 +8,10 @@
 - **Nombre:** A.V Music — «Tu música, tu momento.»
 - **Concepto:** noche violeta. Morados profundos de lienzo y un único acento
   violeta brillante para lo vivo: reproducir, fila activa, sliders y foco.
-  El fondo es una **galaxia de noche violeta**: una nebulosa tipo Vía Láctea
-  (banda diagonal de blobs suaves en violeta/magenta/lila con vetas de
-  polvo) salpicada de estrellas blancas y moradas que parpadean muy
-  levemente, sobre una viñeta que se desvanece hacia los bordes — sin
-  paneles ni divisiones visibles, todo en UN SOLO morado.
+  El fondo es un **agujero negro violeta** (video 4K en loop): un disco de
+  acreción violeta/magenta brillante con lente gravitacional que gira
+  lentamente, sobre el lienzo morado profundo — sin paneles ni divisiones
+  visibles, todo en UN SOLO morado.
 - **Género:** oscuro inmersivo y elegante, glassmorphism sobre ondas.
 - **Estructura:** barra superior + barra lateral + contenido + barra del
   reproductor fija abajo. Los paneles son de cristal: las ondas se ven a
@@ -35,8 +34,9 @@
 | `--color-accent-soft` | `oklch(33% 0.09 295)` | Reservado (la selección activa hoy usa un riel lateral, no un bloque) |
 | `--color-focus` | `oklch(71% 0.19 293)` | Anillo de foco |
 
-**Tintes del fondo** (solo para `GalaxyBackground`, canvas 2D):
-`--color-wave-a` violeta, `--color-wave-b` magenta, `--color-wave-c` lila.
+**Tintes del fondo** (antes usados por el canvas 2D de `GalaxyBackground`,
+que quedó en desuso): `--color-wave-a` violeta, `--color-wave-b` magenta,
+`--color-wave-c` lila.
 
 **Disciplina del color:** el violeta es el único acento de la UI y se reserva
 para lo funcional: play, fila activa, sliders y foco.
@@ -56,29 +56,21 @@ Autoalojada con **@fontsource** (sin red en runtime):
   NO llevan fondo propio: todo se funde en el degradado continuo de la
   ventana (nada de `bg-panel`, `backdrop-blur` ni `border` entre zonas). La
   única diferenciación es el contenido: texto, filas activas y acentos. El
-  fondo vive en `GalaxyBackground` (nebulosa + estrellas, con viñeta que se
-  funde con el lienzo).
-- **Fondo, la única animación decorativa.** `GalaxyBackground`
-  (`src/components/ui`) pinta en canvas 2D propio (sin librerías) una
-  **galaxia de noche violeta**: nebulosa PRE-RENDERIZADA (banda diagonal
-  tipo Vía Láctea de blobs suaves en violeta/magenta/lila, núcleo brillante,
-  vetas oscuras de polvo y viñeta que funde los bordes con el lienzo;
-  redibujada solo al redimensionar, a media resolución) y **estrellas en 3
-  capas** — blancas tiznadas de violeta y moradas, con **parpadeo sutil** y
-  una **deriva extremadamente lenta** (se siente como mirar al firmamento,
-  casi quieto); las MEDIAS llevan un **halo suave** y las BRILLANTES halo +
-  crucecita de difracción, con la **iluminación respirando** al ritmo del
-  parpadeo (sin exagerar). Las capas de estrellas además derivan con
-  **parallax según el puntero** (las cercanas se mueven más que las lejanas
-  y en sentido contrario, suavizado con glide — profundidad real). De vez en
-  cuando (una cada varios minutos, al azar) cruza una **estrella fugaz**
-  sutil: una línea fina que se enciende, cruza el cielo en diagonal y se
-  apaga en ~2 s, sin romper la calma. Viñeta SUAVE: los bordes apenas se
-  oscurecen, para que el panel superior (botones de ventana) no se sienta
-  de otro color que el resto del fondo.
-  Colores: `--color-wave-a/b/c` (nebulosa y estrellas) y `--color-accent`
-  (núcleo y halos). Va con `pointer-events-none`, DPR-aware y se pausa al
-  ocultar la ventana. Nada más anima por decorar.
+  fondo vive en `BlackHoleBackground` (video 4K en loop).
+- **Fondo, la única animación decorativa.** `BlackHoleBackground`
+  (`src/components/ui`) monta el video `/blackhole.webm` (720p re-encodado
+  desde la fuente 4K para que el decode no laggee — a 720p se ve igual y
+  va fluido; 5 s, loop, silencioso, rotado 180° como en la fuente
+  github.com/1Ness1/space): un **agujero negro** con disco de acreción
+  violeta/magenta brillante y lente gravitacional que gira lentamente — el
+  movimiento lo trae el propio video, sin parallax ni canvas. El núcleo es
+  BLANCO cegador, así que el video lleva un **dim suave** (brightness
+  0.78) y un **scrim radial** que oscurece justo la zona central (donde
+  está el disco) y se desvanece hacia los bordes: el texto blanco se lee
+  encima y el violeta de los bordes sigue vivo. `object-cover` cubre toda
+  la ventana, `pointer-events-none` y sin interacción. Se monta en
+  `AppLayout` y en el reproductor maximizado (este último solo mientras
+  está abierto). Nada más anima por decorar.
 - **Carátula en el reproductor maximizado.** La carátula grande lleva una
   **transparencia notable** (`opacity-60`, sin marcos ni contenedores) y
   SIN resplandor: nada de halo radial ni brillo morado alrededor — solo la
@@ -167,8 +159,9 @@ oscuras que tapen el contenido (parches, bandas opacas).
 
 - Los tokens viven en `src/styles/global.css` (`@theme`). Todo color y fuente
   debe referenciarlos (`bg-canvas`, `text-ink`, `font-display`, …).
-- El fondo vive en `src/components/ui/GalaxyBackground.tsx` (canvas 2D
-  propio, sin dependencias) y se monta en `AppLayout` y en el reproductor
-  maximizado (este último solo mientras está abierto).
+- El fondo vive en `src/components/ui/BlackHoleBackground.tsx` (video
+  `/blackhole.webm` en `public/`) y se monta en `AppLayout` y en el
+  reproductor maximizado (este último solo mientras está abierto).
+  `GalaxyBackground.tsx` (el canvas 2D anterior) quedó en desuso.
 - Los comandos Rust viven en `src-tauri/src/lib.rs` y se invocan tipados
   desde los stores (`src/features/**/store.ts`).

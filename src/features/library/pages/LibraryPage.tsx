@@ -67,19 +67,31 @@ export default function LibraryPage() {
     (track: Track, index: number) => {
       const isCurrent = current?.id === track.id;
       return (
-        <button
-          type="button"
-          onClick={() => libraryStore.playTrack(track.id)}
-          className={cn(
-            "grid h-full w-full grid-cols-[2rem_1fr_10rem_4.5rem_2.5rem] items-center gap-3 px-4 py-2.5 text-left",
-          )}
-        >
-          <span className={cn("text-right font-mono text-xs", isCurrent ? "text-ink" : "text-faint")}>
+        // Fila a ancho completo, con la zona clicable reducida DENTRO
+        // (igual que la cola): el botón va del NÚMERO a la DURACIÓN — el
+        // margen izquierdo (antes de la numeración) y el icono de la
+        // derecha NO responden al puntero.
+        <div className="flex h-full w-full items-center gap-3 py-2.5">
+          <button
+            type="button"
+            onClick={() => libraryStore.playTrack(track.id)}
+            className={cn("ml-4 flex h-full min-w-0 flex-1 items-center gap-3 text-left")}
+          >
+          <span
+            className={cn(
+              // Columna COMPACTA (w-6) y alineada a la IZQUIERDA: los dígitos
+              // arrancan exactamente donde empieza la zona clicable (sin
+              // hueco vacío clicable antes) y "Biblioteca" (ml-4) queda
+              // justo sobre la numeración.
+              "w-6 shrink-0 font-mono text-xs tabular-nums",
+              isCurrent ? "text-ink" : "text-faint",
+            )}
+          >
             {String(index + 1).padStart(2, "0")}
           </span>
-          <span className="flex min-w-0 items-center gap-3">
-            <TrackCover track={track} className="h-9 w-9 rounded-sm" />
-            <span className="min-w-0">
+          <span className="flex min-w-0 flex-1 items-center gap-3">
+            <TrackCover track={track} className="h-9 w-9 shrink-0 rounded-sm" />
+            <span className="min-w-0 flex-1">
               <span className="flex min-w-0 items-center gap-2">
                 {/* Misma estructura y misma clase activa o no: al enfocar
                     la fila no cambia nada del layout — solo arranca el
@@ -94,8 +106,15 @@ export default function LibraryPage() {
                     isCurrent && "text-shadow-[0_0_8px_color-mix(in_srgb,white_30%,transparent)]",
                   )}
                 />
+                {/* Oculto visualmente (pedido del usuario): el chip se
+                    mantiene en el DOM por si se quiere recuperar, pero no
+                    se muestra. */}
                 {variantLabel(track.title) && (
-                  <span className="inline-flex shrink-0 items-center self-center rounded-sm border border-accent/30 px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
+                  /* OJO: `hidden` NO se puede combinar con `inline-flex`
+                     (en Tailwind v4 el CSS de `inline-flex` sale después y
+                     gana). Si algún día se quiere recuperar el chip,
+                     quitar `hidden` y volver a poner `inline-flex`. */
+                  <span className="hidden shrink-0 items-center self-center rounded-sm border border-accent/30 px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
                     {variantLabel(track.title)}
                   </span>
                 )}
@@ -108,22 +127,26 @@ export default function LibraryPage() {
           {/* Metadatos incompletos: sin álbum se muestra el título de la
               canción en vez de un guion vacío. */}
           <span
-            className="truncate text-xs text-muted"
+            className="w-40 shrink-0 truncate text-xs text-muted"
             title={track.album?.trim() ? track.album : track.title}
           >
             {track.album?.trim() ? track.album : track.title}
           </span>
-          <span className="text-right font-mono text-xs text-faint">
+          <span className="w-[4.5rem] shrink-0 text-right font-mono text-xs tabular-nums text-faint">
             {formatDuration(track.durationSec)}
           </span>
-          <span className="flex justify-end">
+          </button>
+          {/* Indicador de reproducción DECORATIVO (fuera de la zona
+              clicable): la fila se reproduce de la numeración a la
+              duración, como en la cola. */}
+          <span className="flex w-10 shrink-0 items-center justify-end pr-4">
             {isCurrent && isPlaying ? (
               <IconPlayerPauseFilled aria-hidden="true" size={18} stroke={1.5} className="text-ink" />
             ) : (
               <IconPlayerPlayFilled aria-hidden="true" size={18} stroke={1.5} className="text-faint" />
             )}
           </span>
-        </button>
+        </div>
       );
     },
     [current?.id, isPlaying],
@@ -151,17 +174,11 @@ export default function LibraryPage() {
   return (
     <div className="mx-auto flex h-full max-w-5xl flex-col gap-6 p-8">
       <header className="flex items-end justify-between gap-4 pb-6">
-        <div>
-          <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-faint">
-            Tu música
-          </p>
-          <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">
-            Biblioteca
-          </h1>
-          <p className="mt-1.5 text-sm text-muted">
-            Elige una carpeta y A.V Music la escanea en tu propio disco. Sin nube, sin cuentas.
-          </p>
-        </div>
+        {/* ml-4: alinea el inicio de "Biblioteca" con el inicio de la
+            numeración de la lista (la zona clicable de las filas). */}
+        <h1 className="ml-4 font-display text-3xl font-semibold tracking-tight text-ink">
+          Biblioteca
+        </h1>
         <Button onClick={() => void handleImport()} disabled={scanning} busy={scanning}>
           <IconFolderOpen aria-hidden="true" size={16} stroke={1.75} />
           <ImportLabel scanning={scanning} />

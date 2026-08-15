@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import {
   IconCheck,
   IconDownload,
-  IconFolderOpen,
-  IconLoader2,
   IconMusic,
   IconRefresh,
   IconSearch,
@@ -11,6 +9,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 
 import { Button } from "@/components/ui/Button";
+import { Spinner } from "@/components/ui/Spinner";
 import { VirtualList } from "@/components/ui/VirtualList";
 import { formatDuration } from "@/lib/format";
 import type { Track } from "@/types";
@@ -160,7 +159,9 @@ export default function SearchPage() {
   const [searching, setSearching] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [downloadDir, setDownloadDir] = useState<string | null>(() => {
+  // Carpeta de descargas (solo lectura; la UI de cambiar carpeta se quitó
+  // por pedido del usuario). Si es null, el backend usa la predeterminada.
+  const [downloadDir] = useState<string | null>(() => {
     try {
       return localStorage.getItem("avmusic.downloads.dir.v1");
     } catch {
@@ -344,22 +345,6 @@ export default function SearchPage() {
     }
   }
 
-  async function handleChooseFolder(): Promise<void> {
-    try {
-      const dir = await invoke<string | null>("pick_download_folder");
-      if (dir) {
-        setDownloadDir(dir);
-        try {
-          localStorage.setItem("avmusic.downloads.dir.v1", dir);
-        } catch {
-          // Sin persistencia: se olvida al cerrar.
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
   /**
    * Descarga una canción. Devuelve true si tuvo éxito (para el lote de
    * playlist). Varias descargas pueden correr en paralelo: cada fila lleva
@@ -508,54 +493,56 @@ export default function SearchPage() {
 
   return (
     <div className="mx-auto flex h-full max-w-4xl flex-col gap-6 p-8">
+      {/* Mismo encabezado que Biblioteca: título a la izquierda (alineado
+          con la lista) y el botón a la derecha, ambos al final (items-end). */}
       <header className="pb-6">
-        <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-faint">
-          Sin cuenta, sin límites
-        </p>
-        <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">Buscar</h1>
-        <p className="mt-1.5 text-sm text-muted">
-          Busca en YouTube Music (solo canciones, sin vídeos) y descárgala
-          directo a tu biblioteca con metadatos, carátula y letra. No necesitas
-          iniciar sesión en nada.
-        </p>
+        {/* ml-4: alinea "Buscar" con el inicio de la lista de resultados
+            (las filas llevan px-4), como "Biblioteca" con su numeración. */}
+        <h1 className="ml-4 font-display text-3xl font-semibold tracking-tight text-ink">
+          Buscar
+        </h1>
       </header>
 
-      <form onSubmit={handleSearch} className="flex gap-2">
+      {/* El botón va PEGADO al buscador (misma fila que el input): la lupa
+          es el icono que intuye la búsqueda; al presionar se busca y, mientras
+          corre, la lupa se cambia por el spinner. Enter en el input también
+          busca (submit del form). px-4 en la fila: el input queda alineado
+          con el mensaje de estado. items-stretch: el botón toma EXACTAMENTE
+          el alto del input, sin desfases. max-w-xl: el input ya no ocupa todo
+          el ancho, solo hasta 576 px; el botón va a su lado derecho y el
+          hueco sobrante queda detrás. */}
+      <form
+        id="avmusic-search-form"
+        onSubmit={handleSearch}
+        className="flex items-stretch gap-2 px-4"
+      >
         <input
           value={query}
           onChange={(event) => downloadStore.setSession({ query: event.target.value })}
           placeholder="Canción, artista… o pega un enlace"
-          className="min-w-0 flex-1 rounded-sm px-4 py-2.5 text-sm text-ink placeholder:text-faint focus:outline-none"
+          className="min-w-0 max-w-xl flex-1 rounded-sm px-4 py-2.5 text-sm text-ink placeholder:text-faint focus:outline-none"
         />
-        <Button type="submit" disabled={searching || !query.trim()} className="w-32">
+        <Button
+          type="submit"
+          disabled={searching || !query.trim()}
+          aria-label={searching ? "Buscando…" : "Buscar"}
+          className="w-12 shrink-0 justify-center"
+        >
           {searching ? (
-            <IconLoader2 aria-hidden="true" size={16} stroke={1.75} className="animate-spin" />
+            <Spinner size={20} />
           ) : (
-            <IconSearch aria-hidden="true" size={16} stroke={1.75} />
+            <IconSearch aria-hidden="true" size={20} stroke={1.75} />
           )}
-          {searching ? "Buscando…" : "Buscar"}
         </Button>
       </form>
 
-      {error && (
-        <p className="rounded-sm px-4 py-3 text-sm text-accent">
-          {error}
-        </p>
-      )}
-      {message && <p className="text-sm text-muted">{message}</p>}
-
-      {/* Carpeta de descargas */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <IconFolderOpen aria-hidden="true" size={16} stroke={1.75} className="shrink-0 text-faint" />
-          <p className="min-w-0 truncate font-mono text-xs text-muted">
-            Descargas →{" "}
-            <span className="text-ink">{downloadDir ?? "Descargas\\A.V Music"}</span>
-          </p>
-        </div>
-        <Button variant="secondary" onClick={() => void handleChooseFolder()} className="shrink-0">
-          Cambiar carpeta
-        </Button>
+      {/* Mensaje de estado (discografía, sin resultados, errores) con
+          espacio SIEMPRE reservado: al quitarlo o al buscar otra cosa la
+          vista no salta. Alineado con "Buscar" y la lista (px-4) para que
+          todo arranque en la misma columna. */}
+      <div className="flex min-h-6 items-center px-4">
+        {error && <p className="text-sm text-accent">{error}</p>}
+        {message && <p className="text-sm text-muted">{message}</p>}
       </div>
 
       {/* Descargar la playlist con casillas de selección (secuencial, con
@@ -671,13 +658,20 @@ export default function SearchPage() {
                   <div className="min-w-0">
                     <p className="text-sm font-medium leading-snug text-ink">
                       <span className="min-w-0">{hit.title}</span>
+                      {/* Chips ocultos visualmente (pedido del usuario): se
+                          mantienen en el DOM, solo no se muestran. */}
+                      {/* OJO: `hidden` NO se puede combinar con `inline-flex`
+                          (en Tailwind v4 el CSS de `inline-flex` sale
+                          después y gana). Si algún día se quiere recuperar
+                          el chip, quitar `hidden` y volver a poner
+                          `inline-flex`. */}
                       {hit.uploader.toLowerCase().includes("topic") && (
-                        <span className="ml-1.5 inline-flex items-center rounded-sm px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
+                        <span className="ml-1.5 hidden items-center rounded-sm px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
                           Topic
                         </span>
                       )}
                       {badge && (
-                        <span className="ml-1.5 inline-flex items-center rounded-sm border border-accent/30 px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
+                        <span className="ml-1.5 hidden items-center rounded-sm border border-accent/30 px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase leading-none tracking-wide text-accent">
                           {badge}
                         </span>
                       )}

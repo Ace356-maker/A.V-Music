@@ -3,10 +3,10 @@
 /*
   A.V Music · reproductor local · noche violeta
   Morados profundos de lienzo y un único acento violeta brillante para lo
-  vivo: reproducir, fila activa, sliders y foco. Un fondo de galaxia
-  (nebulosa violeta + estrellas moradas con parpadeo sutil) en canvas 2D
-  (ver GalaxyBackground) da vida al lienzo; los paneles son de cristal MUY
-  translúcido (blur), sin separadores duros ni parches oscuros.
+  vivo: reproducir, fila activa, sliders y foco. El fondo es un agujero
+  negro violeta en video 4K en loop (ver BlackHoleBackground); los paneles
+  son de cristal MUY translúcido (blur), sin separadores duros ni parches
+  oscuros.
   Tipografía: Space Grotesk (display, geométrica y profesional) · Instrument
   Sans (cuerpo) · JetBrains Mono (datos).
 */
@@ -25,7 +25,8 @@
   --color-accent-soft: oklch(33% 0.09 295); /* reservado (la selección activa usa un riel lateral) */
   --color-focus: oklch(71% 0.19 293); /* anillo de foco */
 
-  /* Tintes del fondo (canvas 2D, ver GalaxyBackground) */
+  /* Tintes del fondo (usados por el canvas 2D de GalaxyBackground, en
+     desuso desde el agujero negro) */
   --color-wave-a: oklch(66% 0.18 295); /* violeta */
   --color-wave-b: oklch(68% 0.17 330); /* magenta */
   --color-wave-c: oklch(62% 0.15 280); /* lila */
@@ -133,6 +134,51 @@ input[type="range"]::-moz-range-thumb {
    ya la tienen por su cuenta). */
 button:not(:disabled) {
   cursor: pointer;
+}
+
+/*
+  Spinner (Uiverse.io · barisdogansutcu): el svg rota entero mientras un
+  arco recorre la circunferencia — la "coma" avanza y el círculo gira, en
+  dos animaciones independientes. El trazo usa `currentColor` para tomar el
+  color del elemento donde se use (blanco en los botones, acento en los
+  textos con acento) — nunca un azul propio.
+*/
+.av-spinner {
+  width: 3.25em;
+  transform-origin: center;
+  animation: av-spinner-rotate 2s linear infinite;
+}
+
+.av-spinner circle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-dasharray: 1, 200;
+  stroke-dashoffset: 0;
+  stroke-linecap: round;
+  animation: av-spinner-dash 1.5s ease-in-out infinite;
+}
+
+@keyframes av-spinner-rotate {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes av-spinner-dash {
+  0% {
+    stroke-dasharray: 1, 200;
+    stroke-dashoffset: 0;
+  }
+
+  50% {
+    stroke-dasharray: 90, 200;
+    stroke-dashoffset: -35px;
+  }
+
+  100% {
+    stroke-dashoffset: -125px;
+  }
 }
 
 /* Barra indeterminada de descarga: el relleno cruza la pista de un lado al

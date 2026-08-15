@@ -53,12 +53,12 @@ const SOURCE_LABELS: Record<string, string> = {
  * de 2 px entre filas, que entra dentro del alto para el ventaneo exacto). */
 const QUEUE_ROW_HEIGHT = 62;
 
-// El fondo (galaxia) va en chunk aparte: aquí solo se monta mientras el
-// reproductor maximizado está abierto (dos escenas de fondo a la vez
-// gastarían CPU de más).
-const GalaxyBackground = lazy(async () => {
-  const mod = await import("@/components/ui/GalaxyBackground");
-  return { default: mod.GalaxyBackground };
+// El fondo (agujero negro) va en chunk aparte: aquí solo se monta mientras
+// el reproductor maximizado está abierto (dos fondos a la vez gastarían
+// recursos de más).
+const Background = lazy(async () => {
+  const mod = await import("@/components/ui/BlackHoleBackground");
+  return { default: mod.BlackHoleBackground };
 });
 
 /** Cuánto respetar el scroll manual de la letra antes de volver al centro. */
@@ -816,11 +816,11 @@ export function FullPlayer({
         open ? "translate-y-0" : "translate-y-full",
       )}
     >
-      {/* Fondo (galaxia) del reproductor maximizado, solo mientras está
-          abierto. */}
+      {/* Fondo (agujero negro) del reproductor maximizado, solo mientras
+          está abierto. */}
       {open && (
         <Suspense fallback={null}>
-          <GalaxyBackground />
+          <Background />
         </Suspense>
       )}
       <div className="relative z-10 flex min-h-0 flex-1">
@@ -1111,6 +1111,10 @@ export function FullPlayer({
                   abajo a la derecha; minimizar se hace con clic en cualquier
                   zona del reproductor o con Esc) */}
               <div className="flex items-center justify-center gap-5">
+                {/* Transporte centrado como antes: el mic vive FUERA del
+                    flujo (absolute, anclado a la derecha de repetir) para
+                    alejarlo sin mover los demás botones. */}
+                <div className="relative flex items-center gap-5">
                 <button
                   type="button"
                   onClick={() => playerStore.toggleShuffle()}
@@ -1191,9 +1195,9 @@ export function FullPlayer({
                   )}
                 </button>
 
-                {/* Karaoke: pegado a repetir pero con un hueco claro (ml-4)
-                    para que se entienda que es OTRA cosa — el micrófono
-                    alterna carátula ↔ letra. Mismo efecto que el play. */}
+                {/* Karaoke: fuera del flujo (absolute), a la derecha de
+                    repetir con un hueco amplio — el micrófono alterna
+                    carátula ↔ letra. Mismo efecto que el play. */}
                 <button
                   type="button"
                   onClick={onToggleLyrics}
@@ -1202,7 +1206,7 @@ export function FullPlayer({
                   // Glow BLANCO cuando está ACTIVO (como el play): el
                   // brillo solo aparece al usarlo, no en reposo.
                   className={cn(
-                    "ml-4 flex items-center justify-center rounded-full",
+                    "absolute left-full top-1/2 ml-12 flex -translate-y-1/2 items-center justify-center rounded-full",
                     lyricsOn
                       ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
                       : "text-muted",
@@ -1210,6 +1214,7 @@ export function FullPlayer({
                 >
                   <IconMicrophone2 aria-hidden="true" size={24} stroke={1.75} />
                 </button>
+                </div>
               </div>
             </div>
 

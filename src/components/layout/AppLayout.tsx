@@ -9,11 +9,11 @@ import { TitleBar } from "@/components/layout/TitleBar";
 
 export type View = "biblioteca" | "buscar";
 
-// El fondo (galaxia) es solo decorativo y va en un chunk aparte, cargado
-// mientras la pantalla de carga cubre el arranque.
-const GalaxyBackground = lazy(async () => {
-  const mod = await import("@/components/ui/GalaxyBackground");
-  return { default: mod.GalaxyBackground };
+// El fondo (agujero negro) es solo decorativo y va en un chunk aparte,
+// cargado mientras la pantalla de carga cubre el arranque.
+const Background = lazy(async () => {
+  const mod = await import("@/components/ui/BlackHoleBackground");
+  return { default: mod.BlackHoleBackground };
 });
 
 interface AppLayoutProps {
@@ -29,18 +29,18 @@ const navItems: Array<{ key: View; label: string; icon: typeof IconLibrary }> = 
 
 /**
  * Estructura base de A.V Music: barra superior propia de cristal (translúcida
- * con blur sobre la galaxia), barra lateral de cristal, área de contenido
- * sobre el lienzo (donde se ve el fondo galaxia) y la barra del reproductor
+ * con blur sobre el fondo), barra lateral de cristal, área de contenido
+ * sobre el lienzo (donde se ve el agujero negro) y la barra del reproductor
  * fija abajo, también de cristal. La interfaz se aparta para que la música y
  * las carátulas sean los protagonistas.
  */
 export function AppLayout({ view, onNavigate, children }: AppLayoutProps) {
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-canvas">
-      {/* Fondo (galaxia, decorativo, sin interacción): visible en toda la
-          ventana; todo lo demás se funde con él. */}
+      {/* Fondo (agujero negro, decorativo, sin interacción): visible en
+          toda la ventana; todo lo demás se funde con él. */}
       <Suspense fallback={null}>
-        <GalaxyBackground />
+        <Background />
       </Suspense>
 
       <div className="relative z-10 flex h-full min-h-0 flex-col">
@@ -55,7 +55,7 @@ export function AppLayout({ view, onNavigate, children }: AppLayoutProps) {
                 src="/logo.png"
                 alt="A.V Music"
                 draggable={false}
-                className="h-14 shrink-0 select-none object-contain"
+                className="h-18 shrink-0 select-none object-contain"
               />
             </header>
 
