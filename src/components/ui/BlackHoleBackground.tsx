@@ -34,12 +34,14 @@ export function BlackHoleBackground({ className }: { className?: string }) {
       />
       {/* Scrim radial: oscurece el centro brillante del agujero negro (y el
           anillo del disco) sin apagar el violeta de los bordes. El centro
-          usa un morado muy oscuro del tema, no negro puro. */}
+          usa un morado muy oscuro del tema, no negro puro. Subido un pelín
+          (0.74→0.80) para que el texto blanco se lea sin que el fondo se
+          apague del todo. */}
       <div
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 90% 80% at 50% 50%, rgba(10,8,20,0.74) 0%, rgba(10,8,20,0.5) 24%, rgba(10,8,20,0.2) 40%, rgba(10,8,20,0) 58%)",
+            "radial-gradient(ellipse 90% 80% at 50% 50%, rgba(10,8,20,0.8) 0%, rgba(10,8,20,0.56) 24%, rgba(10,8,20,0.24) 40%, rgba(10,8,20,0) 58%)",
         }}
       />
       <StarField />

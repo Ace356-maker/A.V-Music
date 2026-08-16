@@ -235,7 +235,7 @@ export function RangeSlider({
           style={{ left: `${bubbleLeft}%` }}
         >
           <div className="flex items-center whitespace-nowrap rounded-md border border-rule bg-panel-2 px-2 py-0.5 shadow-lg shadow-black/50">
-            <span ref={bubbleTextRef} className="font-mono text-[11px] font-semibold tabular-nums text-ink">
+            <span ref={bubbleTextRef} className="text-[11px] font-semibold tabular-nums text-ink">
               {dragLabel?.(bubbleValue)}
             </span>
           </div>

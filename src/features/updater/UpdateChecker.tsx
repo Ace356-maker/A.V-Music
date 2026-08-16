@@ -198,10 +198,10 @@ export function UpdateChecker() {
       <div className="w-full max-w-sm rounded-xl border border-rule bg-panel-2 p-6 shadow-2xl shadow-black/60">
         {/* Cabecera: título + versión nueva */}
         <div className="flex items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold tracking-tight text-ink">
+          <h2 className="text-lg font-semibold tracking-tight text-ink">
             Actualización disponible
           </h2>
-          <span className="shrink-0 rounded-sm border border-rule bg-panel px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-ink">
+          <span className="shrink-0 rounded-sm border border-rule bg-panel px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink">
             v{version}
           </span>
         </div>
@@ -217,7 +217,7 @@ export function UpdateChecker() {
                   ? "¡Actualización instalada!"
                   : "No se pudo actualizar"}
             </p>
-            <p className="mt-1 font-mono text-xs tabular-nums text-faint">
+            <p className="mt-1 text-xs tabular-nums text-faint">
               {phase === "downloading"
                 ? `${percent ?? 0}%`
                 : phase === "installing"

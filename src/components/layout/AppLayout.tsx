@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { IconLibrary, IconSearch } from "@tabler/icons-react";
+import { IconHeart, IconHeartFilled, IconMusic, IconSearch } from "@tabler/icons-react";
 
 import { lazy, Suspense } from "react";
 
@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { PlayerBar } from "@/features/player/components/PlayerBar";
 import { TitleBar } from "@/components/layout/TitleBar";
 
-export type View = "biblioteca" | "buscar";
+export type View = "biblioteca" | "buscar" | "gusta";
 
 // El fondo (agujero negro) es solo decorativo y va en un chunk aparte,
 // cargado mientras la pantalla de carga cubre el arranque.
@@ -22,9 +22,16 @@ interface AppLayoutProps {
   children: ReactNode;
 }
 
-const navItems: Array<{ key: View; label: string; icon: typeof IconLibrary }> = [
-  { key: "biblioteca", label: "Biblioteca", icon: IconLibrary },
+const navItems: Array<{
+  key: View;
+  label: string;
+  icon: typeof IconMusic;
+  /** Icono RELLENO cuando la sección está en foco (solo el corazón). */
+  activeIcon?: typeof IconMusic;
+}> = [
+  { key: "biblioteca", label: "Biblioteca", icon: IconMusic },
   { key: "buscar", label: "Buscar", icon: IconSearch },
+  { key: "gusta", label: "Mis Me Gusta", icon: IconHeart, activeIcon: IconHeartFilled },
 ];
 
 /**
@@ -79,12 +86,23 @@ export function AppLayout({ view, onNavigate, children }: AppLayoutProps) {
                         : "text-muted",
                     )}
                   >
-                    <item.icon
-                      aria-hidden="true"
-                      size={18}
-                      stroke={1.75}
-                      className={cn("shrink-0", active ? "text-ink" : "text-faint")}
-                    />
+                    {/* El corazón, en foco, se RELLENA de blanco (IconHeartFilled)
+                        como el corazón gustado del reproductor. */}
+                    {active && item.activeIcon ? (
+                      <item.activeIcon
+                        aria-hidden="true"
+                        size={18}
+                        stroke={1.75}
+                        className={cn("shrink-0", active ? "text-ink" : "text-faint")}
+                      />
+                    ) : (
+                      <item.icon
+                        aria-hidden="true"
+                        size={18}
+                        stroke={1.75}
+                        className={cn("shrink-0", active ? "text-ink" : "text-faint")}
+                      />
+                    )}
                     {item.label}
                   </button>
                 );

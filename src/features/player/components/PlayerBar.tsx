@@ -13,6 +13,8 @@ import {
 } from "@tabler/icons-react";
 
 import { cn } from "@/lib/cn";
+import { SlideTitle } from "@/components/ui/SlideTitle";
+import { LikeButton } from "@/components/ui/LikeButton";
 import { RangeSlider } from "@/components/ui/RangeSlider";
 import { CoverCrossfade } from "@/components/ui/CoverCrossfade";
 import { useTrackCover } from "@/lib/useTrackCover";
@@ -174,14 +176,23 @@ export function PlayerBar() {
         <div
           key={current?.id ?? "sin-pista"}
           className="min-w-0"
-          style={{ animation: `av-cambio-in ${Math.round(FADE_SEC * 1000)}ms ease` }}
+          // Fundido SIN zoom (av-cambio-in-fade): el scale del av-cambio-in
+          // hace que el texto arranque un pelín más abajo y "suba" al
+          // asentarse — el saltito al cambiar de canción.
+          style={{ animation: `av-cambio-in-fade ${Math.round(FADE_SEC * 1000)}ms ease` }}
         >
           {/* Halo blanco sutil en el título (sin exagerar): text-shadow
               (NO drop-shadow) para que el brillo rodee la forma de cada
               letra y no se sienta como una caja rectangular. */}
-          <p className="truncate text-sm font-medium text-ink text-shadow-[0_0_8px_color-mix(in_srgb,white_25%,transparent)]">
-            {current?.title ?? "Sin pista"}
-          </p>
+          {/* SlideTitle = el MISMO marquee del título maximizado: si el
+              nombre es muy largo desborda el ancho de la barra, se
+              recorta y desliza en loop (tras la pausa inicial). El
+              minimizado siempre muestra la pista en reproducción, así
+              desliza solo cuando hace falta. */}
+          <SlideTitle
+            text={current?.title ?? "Sin pista"}
+            className="text-sm font-medium text-ink text-shadow-[0_0_8px_color-mix(in_srgb,white_25%,transparent)]"
+          />
           <p className="truncate text-xs text-muted">
             {current?.artist ?? "Elige una canción de tu biblioteca"}
           </p>
@@ -197,8 +208,15 @@ export function PlayerBar() {
       <div className="flex flex-1 flex-col items-center gap-1.5">
         {/* El transporte queda CENTRADO como antes: el mic vive FUERA del
             flujo (absolute), anclado a la derecha de repetir — así se
-            aleja de él sin mover los demás botones. */}
+            aleja de él sin mover los demás botones. El corazón de "Me
+            gusta" va en el espejo (absolute a la izquierda, antes del
+            shuffle) para que el transporte quede simétrico. */}
         <div className="relative flex items-center gap-5">
+          <LikeButton
+            trackId={current?.id ?? null}
+            size={20}
+            className="absolute right-full top-1/2 mr-12 -translate-y-1/2"
+          />
           <button
             type="button"
             onClick={() => playerStore.toggleShuffle()}
@@ -301,7 +319,7 @@ export function PlayerBar() {
           </button>
         </div>
         <div className="flex w-full max-w-xl items-center gap-3">
-          <span className="w-11 text-right font-mono text-[11px] tabular-nums text-ink">
+          <span className="w-11 text-right text-[11px] tabular-nums text-ink">
             {formatDuration(shownPosition)}
           </span>
           <RangeSlider
@@ -317,7 +335,7 @@ export function PlayerBar() {
             dragLabel={(seekValue) => formatDuration(seekValue)}
             className="flex-1"
           />
-          <span className="w-11 font-mono text-[11px] tabular-nums text-ink">
+          <span className="w-11 text-[11px] tabular-nums text-ink">
             {formatDuration(shownDuration)}
           </span>
         </div>
@@ -355,7 +373,7 @@ export function PlayerBar() {
           Superpuesta y sin interacción (pointer-events-none) para no
           interferir con nada de la barra. */}
       {appVersion && (
-        <span className="pointer-events-none absolute bottom-1 right-3 font-mono text-[10px] tabular-nums text-faint/70">
+        <span className="pointer-events-none absolute bottom-1 right-3 text-[10px] tabular-nums text-faint/70">
           v{appVersion}
         </span>
       )}

@@ -272,6 +272,71 @@ export const playerStore = {
     persistSession();
   },
 
+  /**
+   * Pistas eliminadas (sus archivos se borraron del disco): sincroniza la
+   * cola y, si la pista actual se fue, salta a la siguiente que siga
+   * existiendo (o limpia el reproductor si no queda nada). Se llama desde
+   * libraryStore.removeTracks con la biblioteca ya actualizada.
+   */
+  handleTracksRemoved(removed: Set<string>, library: Track[]): void {
+    const currentGone = state.current !== null && removed.has(state.current.id);
+    if (state.queueSource === "library") {
+      // La cola era la carpeta completa: state.queue aún es la lista vieja
+      // (la nueva llega en `library`). Si la actual se fue, tomar la
+      // siguiente de la carpeta que siga existiendo; si no, solo refrescar.
+      if (currentGone) {
+        const oldQueue = state.queue;
+        const currentId = state.current?.id ?? null;
+        const index = currentId !== null ? oldQueue.findIndex((track) => track.id === currentId) : -1;
+        let nextTrack: Track | null = null;
+        for (let i = index + 1; i < oldQueue.length; i += 1) {
+          if (!removed.has(oldQueue[i].id)) {
+            nextTrack = oldQueue[i];
+            break;
+          }
+        }
+        if (!nextTrack) {
+          for (let i = 0; i < Math.max(0, index); i += 1) {
+            if (!removed.has(oldQueue[i].id)) {
+              nextTrack = oldQueue[i];
+              break;
+            }
+          }
+        }
+        if (nextTrack) {
+          void changeTrack(nextTrack, library, true, "library");
+        } else {
+          engine.pause();
+          setPartial({ queue: [], current: null, isPlaying: false });
+          persistSession();
+        }
+      } else {
+        const freshCurrent =
+          library.find((track) => track.id === state.current?.id) ?? state.current;
+        setPartial({ queue: library, current: freshCurrent });
+        persistSession();
+      }
+      return;
+    }
+    // Cola manual: quitar las borradas y, si la actual se fue, arrancar la
+    // primera que quede (o vaciar el reproductor).
+    const queue = state.queue.filter((track) => !removed.has(track.id));
+    if (queue.length === state.queue.length) return;
+    if (currentGone) {
+      const nextTrack = queue[0] ?? null;
+      if (nextTrack) {
+        void changeTrack(nextTrack, queue, true);
+      } else {
+        engine.pause();
+        setPartial({ queue: [], current: null, isPlaying: false });
+        persistSession();
+      }
+    } else {
+      setPartial({ queue });
+      persistSession();
+    }
+  },
+
   togglePlay(): void {
     if (!state.current) return;
     if (state.isPlaying) {

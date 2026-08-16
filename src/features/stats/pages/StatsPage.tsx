@@ -9,10 +9,10 @@ export default function StatsPage() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
       <header className="pb-6">
-        <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-faint">
+        <p className="mb-2 text-[11px] uppercase tracking-[0.18em] text-faint">
           Datos reales
         </p>
-        <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">
+        <h1 className="text-3xl font-semibold tracking-tight text-ink">
           Estadísticas
         </h1>
         <p className="mt-1.5 text-sm text-muted">Lo que llevas en tu biblioteca, sin inventar nada.</p>
@@ -20,22 +20,22 @@ export default function StatsPage() {
 
       <div className="grid grid-cols-3 gap-4">
         <div className="p-5">
-          <p className="font-display text-3xl font-semibold tabular-nums text-ink">{tracks.length}</p>
-          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-faint">Pistas</p>
+          <p className="text-3xl font-semibold tabular-nums text-ink">{tracks.length}</p>
+          <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-faint">Pistas</p>
         </div>
         <div className="p-5">
-          <p className="font-display text-3xl font-semibold tabular-nums text-ink">{totalMinutes}</p>
-          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-faint">Minutos</p>
+          <p className="text-3xl font-semibold tabular-nums text-ink">{totalMinutes}</p>
+          <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-faint">Minutos</p>
         </div>
         <div className="p-5">
-          <p className="font-display text-3xl font-semibold tabular-nums text-ink">
+          <p className="text-3xl font-semibold tabular-nums text-ink">
             {new Set(
               tracks
                 .map((track) => track.artist)
                 .filter((artist): artist is string => artist !== null),
             ).size}
           </p>
-          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-faint">Artistas</p>
+          <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-faint">Artistas</p>
         </div>
       </div>
 

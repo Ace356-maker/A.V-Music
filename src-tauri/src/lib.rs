@@ -493,6 +493,13 @@ fn scan_folder(path: String) -> Result<Vec<TrackMeta>, String> {
         if !entry.file_type().is_file() {
             continue;
         }
+        // Nunca se escanean temporales de descarga: si quedó un `av_raw_…`
+        // o `av_thumb_…` en la carpeta (descarga colgada, app cerrada a
+        // medias…), no debe entrar a la biblioteca como canción.
+        let file_name = entry.file_name().to_string_lossy().to_lowercase();
+        if file_name.starts_with("av_raw") || file_name.starts_with("av_thumb") {
+            continue;
+        }
         let extension = entry
             .path()
             .extension()
@@ -537,6 +544,23 @@ fn paths_exist(paths: Vec<String>) -> Vec<bool> {
     paths
         .iter()
         .map(|path| std::path::Path::new(path).exists())
+        .collect()
+}
+
+/// Elimina archivos de audio del disco PARA SIEMPRE (borrado definitivo,
+/// sin papelera). Devuelve por cada ruta si quedó eliminada: true también
+/// cuando el archivo ya no existía (se considera eliminado). Si algo falla
+/// (permisos, archivo en uso…), esa entrada va en false y el frontend no
+/// quita la pista de la biblioteca.
+#[tauri::command]
+fn delete_tracks(paths: Vec<String>) -> Vec<bool> {
+    paths
+        .iter()
+        .map(|path| match std::fs::remove_file(path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        })
         .collect()
 }
 
@@ -706,6 +730,11 @@ async fn yt_search(app: tauri::AppHandle, query: String) -> Result<SearchRespons
             let _ = disc_tx.send(artist_discography_sync(&disc_query));
         });
         let songs = search_sync(&app, &query)?;
+        // Respaldo LIMPIO: si la consulta era de un artista (2+ palabras) y
+        // la discografía no resolvió, se filtran las canciones para quedarse
+        // solo con las de ESE artista — nunca una lista mezclada con vídeos
+        // u otros artistas.
+        let songs = filter_songs_to_artist(songs, &query);
         if let Ok(Some(resp)) = disc_rx.recv_timeout(std::time::Duration::from_secs(45)) {
             if !resp.albums.is_empty() || !resp.singles.is_empty() {
                 return Ok(resp);
@@ -1124,7 +1153,14 @@ fn artist_name_matches(query: &str, candidate: &str) -> bool {
     };
     let q_words = words(query);
     let c_words = words(candidate);
-    q_words.iter().filter(|word| c_words.contains(word)).count() >= 2
+    // Las palabras compartidas deben ir EN ORDEN dentro del candidato:
+    // "Cooper Alan" no debe cazar a un artista distinto llamado "Alan
+    // Cooper" (mismas palabras invertidas), pero "Cooper Alan & Friends"
+    // (superset con las palabras en orden) sí.
+    q_words.len() >= 2
+        && c_words
+            .windows(q_words.len())
+            .any(|window| window == q_words.as_slice())
 }
 
 /// Extrae el número de suscriptores de un subtítulo de artista ("Artista •
@@ -1542,6 +1578,25 @@ fn fetch_candidate_discographies(
     })
 }
 
+/// Descarta candidatos a artista que son canales FAN o falsos con el mismo
+/// nombre que el real: se detectan por tener poquísimos suscriptores en
+/// comparación con el candidato más grande (p. ej. un "cooper alan" con
+/// 1.5 K subs y un catálogo de 83 lanzamientos sospechosos frente al
+/// oficial con 1.1 M). El canal Topic real suele tener decenas de % de los
+/// subs del oficial, así que nunca se descarta por esto. Solo actúa cuando
+/// el más grande tiene suscriptores legibles (artistas pequeños o
+/// subtítulos sin número se conservan todos).
+fn drop_suspicious_lookalikes(candidates: Vec<ArtistCandidate>) -> Vec<ArtistCandidate> {
+    let max_subs = candidates.iter().map(|c| c.subscribers).max().unwrap_or(0);
+    if max_subs < 100_000 {
+        return candidates;
+    }
+    candidates
+        .into_iter()
+        .filter(|c| c.subscribers == 0 || c.subscribers as f64 >= max_subs as f64 * 0.01)
+        .collect()
+}
+
 /// Intenta resolver la consulta como la discografía completa de un artista
 /// (álbumes con sus canciones en orden y los sencillos más recientes).
 /// `None` si la consulta no es un artista o si YouTube Music no colabora:
@@ -1555,11 +1610,13 @@ fn artist_discography_sync(query: &str) -> Option<SearchResponse> {
     // (consulta ambigua) gana el canal con más lanzamientos (empate → más
     // suscriptores).
     const MAX_CANDIDATES: usize = 4;
-    let candidates: Vec<ArtistCandidate> = find_artist_candidates(query)
-        .into_iter()
-        .filter(|candidate| artist_name_matches(query, &candidate.name))
-        .take(MAX_CANDIDATES)
-        .collect();
+    let candidates: Vec<ArtistCandidate> = drop_suspicious_lookalikes(
+        find_artist_candidates(query)
+            .into_iter()
+            .filter(|candidate| artist_name_matches(query, &candidate.name))
+            .take(MAX_CANDIDATES)
+            .collect(),
+    );
     if candidates.is_empty() {
         return None;
     }
@@ -1570,7 +1627,7 @@ fn artist_discography_sync(query: &str) -> Option<SearchResponse> {
         .collect::<std::collections::HashSet<_>>()
         .len()
         == 1;
-    let (mut releases, artist_name) = if same_artist {
+    let (releases, artist_name) = if same_artist {
         // Unión deduplicada por (título normalizado, año): un lanzamiento
         // presente en dos canales solo cuenta una vez.
         let mut merged: Vec<ReleaseItem> = Vec::new();
@@ -1610,11 +1667,24 @@ fn artist_discography_sync(query: &str) -> Option<SearchResponse> {
             candidates[best_index].name.clone(),
         )
     };
+    build_artist_response(&artist_name, releases)
+}
+
+/// Construye el `SearchResponse` de discografía a partir de los
+/// lanzamientos (álbumes + sencillos) de un artista: ordena (más recientes
+/// primero), limita a un tope razonable, trae las listas de pistas en
+/// paralelo y arma la respuesta. `None` si no hay nada que mostrar. Lo
+/// comparten la búsqueda de texto de artista y el enlace de canal.
+fn build_artist_response(
+    artist_name: &str,
+    releases: Vec<ReleaseItem>,
+) -> Option<SearchResponse> {
     if releases.is_empty() {
         return None;
     }
     // Más recientes primero (año vacío al final); dentro del mismo año,
     // alfabético para que el orden sea estable al fusionar canales.
+    let mut releases = releases;
     releases.sort_by(|a, b| {
         let year_a = a.year.parse::<u32>().unwrap_or(0);
         let year_b = b.year.parse::<u32>().unwrap_or(0);
@@ -1659,11 +1729,11 @@ fn artist_discography_sync(query: &str) -> Option<SearchResponse> {
             });
         } else {
             // La fila de un sencillo no trae columna de artistas: se usa el
-            // nombre del artista de la consulta (el del canal oficial).
+            // nombre del artista (el del canal oficial).
             let mut hits = tracks.clone();
             for hit in &mut hits {
                 if hit.artists.is_empty() {
-                    hit.artists.push(artist_name.clone());
+                    hit.artists.push(artist_name.to_string());
                 }
             }
             single_hits.extend(hits);
@@ -1675,11 +1745,88 @@ fn artist_discography_sync(query: &str) -> Option<SearchResponse> {
     Some(SearchResponse {
         kind: "artist".to_string(),
         songs: Vec::new(),
-        artist_name,
+        artist_name: artist_name.to_string(),
         albums: album_groups,
         singles: single_hits,
         singles_total,
     })
+}
+
+/// Resuelve un ENLACE de canal de artista de YouTube / YouTube Music
+/// (@handle, /channel/UC… o /c/…) a su discografía completa. El id del
+/// canal se obtiene con yt-dlp (una sola entrada en modo plano, sin
+/// descargar nada) y se construye la misma discografía que una búsqueda de
+/// texto de artista — el enlace es la forma a prueba de fallos de llegar al
+/// artista correcto cuando la búsqueda es ambigua.
+fn artist_by_link_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchResponse, String> {
+    let output = ytdlp(
+        app,
+        &[
+            "--no-warnings",
+            "--skip-download",
+            "--flat-playlist",
+            "--playlist-items",
+            "1",
+            "--print",
+            "%(channel_id)s\t%(channel)s",
+            url,
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(decode_ytdlp(&output.stderr).trim().to_string());
+    }
+    let stdout = decode_ytdlp(&output.stdout);
+    let Some(first) = stdout.lines().next() else {
+        return Err("No pude leer el canal de ese enlace.".to_string());
+    };
+    let parts: Vec<&str> = first.split('\t').collect();
+    let channel_id = parts[0].trim();
+    if channel_id.is_empty() || channel_id == "NA" {
+        return Err("No pude leer el canal de ese enlace.".to_string());
+    }
+    let channel_name = parts
+        .get(1)
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty() && *name != "NA")
+        .map(decode_html_entities)
+        .unwrap_or_default();
+    let artist_name = if channel_name.is_empty() {
+        channel_id.to_string()
+    } else {
+        channel_name
+    };
+    let releases = fetch_discography(channel_id);
+    build_artist_response(&artist_name, releases).ok_or_else(|| {
+        "Ese canal no tiene discografía visible en YouTube Music.".to_string()
+    })
+}
+
+/// Filtra resultados de canciones para quedarse solo con las del artista
+/// buscado (respaldo cuando la discografía no resolvió): así la búsqueda de
+/// un artista nunca se ve mezclada con vídeos u otros artistas. Solo se
+/// aplica a consultas de 2+ palabras (los nombres de artista ambiguos suelen
+/// serlo; una palabra suelta como "imagine" puede ser una canción) y si el
+/// filtro dejaría la lista vacía (la consulta no era un artista) se
+/// conserva la lista original.
+fn filter_songs_to_artist(songs: Vec<SearchHit>, query: &str) -> Vec<SearchHit> {
+    if normalize(query).split_whitespace().count() < 2 {
+        return songs;
+    }
+    let filtered: Vec<SearchHit> = songs
+        .iter()
+        .filter(|hit| {
+            hit.artists
+                .iter()
+                .any(|artist| artist_name_matches(query, artist))
+                || artist_name_matches(query, &hit.uploader)
+        })
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        songs
+    } else {
+        filtered
+    }
 }
 
 fn search_sync(app: &tauri::AppHandle, query: &str) -> Result<Vec<SearchHit>, String> {
@@ -1854,6 +2001,17 @@ async fn yt_resolve(app: tauri::AppHandle, url: String) -> Result<SearchHit, Str
     tauri::async_runtime::spawn_blocking(move || resolve_sync(&app, &url))
         .await
         .map_err(|err| format!("Consulta interrumpida: {err}"))?
+}
+
+/// Discografía completa de un artista desde el ENLACE de su canal
+/// (https://music.youtube.com/@handle, /channel/UC… o /c/…): la misma
+/// respuesta que una búsqueda de texto que resuelve a artista. Fuera del
+/// hilo principal para no congelar la UI.
+#[tauri::command]
+async fn yt_artist(app: tauri::AppHandle, url: String) -> Result<SearchResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || artist_by_link_sync(&app, &url))
+        .await
+        .map_err(|err| format!("Consulta de artista interrumpida: {err}"))?
 }
 
 /// Lista TODAS las canciones de una playlist de YouTube / YouTube Music con
@@ -2575,17 +2733,42 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
 }
 
 /// Lanza yt-dlp leyendo su stderr línea a línea: emite el evento
+/// Tiempo sin NINGUNA salida de yt-dlp (ni una línea) antes de considerar
+/// la descarga colgada: se mata el proceso y se reintenta. yt-dlp imprime
+/// líneas cada 1-2 s durante la descarga real, así que 30 s de silencio son
+/// casi siempre una red muerta o una detección de bots — la descarga que
+/// quedaba pegada en 0 % para siempre.
+const STALL_TIMEOUT_SECS: u64 = 30;
+/// Mensaje de descarga colgada: lo usa el reintento automático (se trata
+/// como transitorio) y la UI para mostrarlo como aviso, no como error grave.
+const STALL_MSG: &str = "La descarga se quedó sin respuesta y se canceló.";
+
+/// ¿Es el error de descarga colgada (yt-dlp sin salida en demasiado
+/// tiempo)? Se trata como transitorio: se reintenta solo igual que un
+/// bloqueo de YouTube.
+fn is_stall_error(err: &str) -> bool {
+    err.starts_with("La descarga se quedó sin respuesta")
+}
+
 /// `download-progress` con el porcentaje y la velocidad en vivo.
 ///
 /// stdout se lee en un hilo aparte: si yt-dlp llenara el pipe de stdout
 /// mientras aquí se lee stderr, ambos se bloquearían para siempre y la UI
 /// quedaría en "Descargando…" sin terminar. Leer los dos a la vez evita el
 /// interbloqueo.
+/// El stderr también se lee en un hilo y cada línea viaja por un canal:
+/// si yt-dlp se cuelga y no escribe NADA durante `STALL_TIMEOUT_SECS`, el
+/// hilo principal lo detecta (recv_timeout), mata el proceso y devuelve
+/// `STALL_MSG` — la UI pasa a "Reintentando…" en vez de quedarse pegada en
+/// 0 % para siempre.
+/// Devuelve la salida del proceso y el último porcentaje emitido (0.0 si no
+/// hubo progreso): el llamador lo usa para que la UI nunca vea el número
+/// retroceder entre reintentos.
 fn run_with_progress(
     app: &tauri::AppHandle,
     args: &[String],
     url: &str,
-) -> Result<std::process::Output, String> {
+) -> Result<(std::process::Output, f64), String> {
     use std::io::{BufRead, BufReader, Read};
     use std::sync::mpsc;
 
@@ -2612,26 +2795,59 @@ fn run_with_progress(
         let _ = out_tx.send((out_buf, result));
     });
 
-    let mut err_buf: Vec<u8> = Vec::new();
-    let mut err_reader = BufReader::new(stderr);
-    let mut raw_line: Vec<u8> = Vec::new();
-    loop {
-        raw_line.clear();
-        let n = err_reader
-            .read_until(b'\n', &mut raw_line)
-            .map_err(|err| err.to_string())?;
-        if n == 0 {
-            break;
+    // Hilo lector de stderr: cada línea (bytes crudos) viaja por el canal
+    // al hilo principal, que vigila el tiempo muerto con recv_timeout.
+    let (line_tx, line_rx) = mpsc::channel::<Vec<u8>>();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut raw_line: Vec<u8> = Vec::new();
+        loop {
+            raw_line.clear();
+            let n = reader.read_until(b'\n', &mut raw_line).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            if line_tx.send(raw_line.clone()).is_err() {
+                break;
+            }
         }
+    });
+
+    let mut err_buf: Vec<u8> = Vec::new();
+    // Último porcentaje emitido (para que los reintentos nunca lo hagan
+    // retroceder en la UI).
+    let mut last = 0.0_f64;
+    let stall_timeout = std::time::Duration::from_secs(STALL_TIMEOUT_SECS);
+    loop {
+        let raw_line = match line_rx.recv_timeout(stall_timeout) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Sin una sola línea en demasiado tiempo: yt-dlp está
+                // colgado (red muerta, detección de bots…). Se mata el
+                // proceso para que la UI no se quede en 0 % para siempre;
+                // el llamador reintenta como transitorio.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(STALL_MSG.to_string());
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         // Conservamos los bytes crudos (pueden ser CP1252) y decodificamos
         // solo para leer el progreso; el buffer se guarda tal cual.
         let decoded = decode_ytdlp(&raw_line);
         if let Some((percent, speed)) = parse_progress(&decoded) {
+            // La descarga del audio ocupa el tramo 10→70 % del total (el 10 %
+            // inicial se reserva a la preparación y los reintentos, que la
+            // UI muestra subiendo lento para que el número nunca salte); el
+            // 30 % restante lo ocupa la conversión a MP3 con progreso real
+            // en `convert_to_mp3`. Así el número sube de 0 a 100 sin saltos.
+            let scaled = (10.0 + percent * 0.6).clamp(10.0, 70.0);
+            last = scaled;
             let _ = app.emit(
                 "download-progress",
                 ProgressPayload {
                     url: url.to_string(),
-                    percent,
+                    percent: scaled,
                     speed,
                 },
             );
@@ -2640,15 +2856,19 @@ fn run_with_progress(
     }
 
     let (out_buf, out_result) = out_rx.recv().map_err(|err| err.to_string())?;
+    let _ = stderr_thread.join();
     let _ = out_thread.join();
     out_result.map_err(|err| err.to_string())?;
     let status = child.wait().map_err(|err| err.to_string())?;
 
-    Ok(std::process::Output {
-        status,
-        stdout: out_buf,
-        stderr: err_buf,
-    })
+    Ok((
+        std::process::Output {
+            status,
+            stdout: out_buf,
+            stderr: err_buf,
+        },
+        last,
+    ))
 }
 
 /// Extrae porcentaje y velocidad de una línea de progreso de yt-dlp:
@@ -4495,6 +4715,20 @@ fn find_stem_file(dir: &std::path::Path, stem: &str) -> Option<std::path::PathBu
     None
 }
 
+/// Borra un archivo que puede estar momentáneamente bloqueado por Windows
+/// (el antivirus suele abrirlo justo tras la descarga — WinError 32): se
+/// reintenta el borrado con esperas cortas antes de rendirse, para que el
+/// `.part` sobrante no obligue a yt-dlp a arrastrar basura en el intento
+/// siguiente ni a fallar otra vez por el mismo candado.
+fn remove_file_retry(path: &std::path::Path) {
+    for attempt in 0..6 {
+        if std::fs::remove_file(path).is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400 * (attempt as u64 + 1)));
+    }
+}
+
 /// Borra los temporales del audio crudo DE ESTA descarga (`av_raw_{stem}.*`,
 /// `.part`, `.ytdl`) tras un intento fallido, para que no queden archivos
 /// raros en la carpeta de descargas que nunca llegan a convertirse en MP3.
@@ -4515,28 +4749,122 @@ fn cleanup_raw_attempt(base: &std::path::Path, stem: &str) {
             .map(|name| name.to_string_lossy().to_lowercase())
             .unwrap_or_default();
         if lower.starts_with(&prefix) || lower.starts_with("av_raw.") {
-            let _ = std::fs::remove_file(&path);
+            remove_file_retry(&path);
         }
     }
 }
 
 /// Convierte un archivo de audio a MP3 V0 con ffmpeg (nosotros, no yt-dlp).
+/// Convierte el audio crudo a MP3 con ffmpeg emitiendo progreso REAL
+/// (70→100 %): la duración total sale del encabezado que ffmpeg imprime en
+/// stderr (`Duration: HH:MM:SS.cc`) y el avance, de `-progress pipe:1`
+/// (`out_time_us=…`). Si la duración no se puede leer, el porcentaje se
+/// queda donde está y la conversión termina igual.
 fn convert_to_mp3(
+    app: &tauri::AppHandle,
     ffmpeg: &str,
     input: &std::path::Path,
     output: &std::path::Path,
+    url: &str,
 ) -> Result<(), String> {
-    let status = command(ffmpeg)
-        .args(["-y", "-i"])
+    use std::io::{BufRead, BufReader};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let mut child = command(ffmpeg)
+        .args(["-y", "-nostats", "-progress", "pipe:1", "-i"])
         .arg(input)
         .args(["-c:a", "libmp3lame", "-q:a", "0", "-id3v2_version", "4"])
         .arg(output)
-        .status()
-        .map_err(|err| err.to_string())?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("No se pudo ejecutar ffmpeg: {err}"))?;
+
+    let stderr = child.stderr.take().ok_or("sin stderr")?;
+    let stdout = child.stdout.take().ok_or("sin stdout")?;
+
+    // Duración total del input, leída en un hilo desde el encabezado de
+    // stderr mientras el hilo principal consume el progreso de stdout (leer
+    // ambos pipes a la vez evita que ffmpeg se bloquee llenando uno).
+    let total_us: Arc<Mutex<Option<u128>>> = Arc::new(Mutex::new(None));
+    let total_for_thread = Arc::clone(&total_us);
+    let stderr_thread = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(idx) = line.find("Duration: ") {
+                if let Some(secs) = parse_ffmpeg_duration(&line[idx + "Duration: ".len()..]) {
+                    let mut guard = total_for_thread.lock().unwrap();
+                    *guard = Some((secs * 1_000_000.0) as u128);
+                    break;
+                }
+            }
+        }
+    });
+
+    // `-progress pipe:1` escribe `out_time_us=…` (y `out_time_ms=…` en
+    // versiones nuevas, también en microsegundos) línea a línea en stdout.
+    let (tx, rx) = mpsc::channel::<u128>();
+    let stdout_thread = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some(value) = line.strip_prefix("out_time_us=") {
+                let _ = tx.send(value.trim().parse::<u128>().unwrap_or(0));
+            } else if let Some(value) = line.strip_prefix("out_time_ms=") {
+                let _ = tx.send(value.trim().parse::<u128>().unwrap_or(0));
+            }
+        }
+    });
+
+    // Convierte el avance de la conversión al tramo 70→100 del total, sin
+    // saturar la UI: solo se emite cuando el porcentaje sube ≥1 punto.
+    // Arranca en 70 (donde cerró la descarga) para que el número siga
+    // subiendo sin saltos. Si ffmpeg se cuelga y no escribe nada durante
+    // `STALL_TIMEOUT_SECS`, se mata y se devuelve el error (el llamador
+    // conserva el audio crudo en vez de quedarse pegados en 70 %).
+    let mut last_emitted = 70.0_f64;
+    loop {
+        let out_us = match rx.recv_timeout(std::time::Duration::from_secs(STALL_TIMEOUT_SECS)) {
+            Ok(value) => value,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("La conversión a MP3 se quedó sin respuesta y se canceló.".to_string());
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        if let Some(total) = *total_us.lock().unwrap() {
+            if total > 0 {
+                let frac = (out_us as f64 / total as f64).clamp(0.0, 1.0);
+                let pct = (70.0 + 30.0 * frac).clamp(70.0, 99.0);
+                if pct - last_emitted >= 1.0 {
+                    last_emitted = pct;
+                    let _ = app.emit(
+                        "download-progress",
+                        ProgressPayload {
+                            url: url.to_string(),
+                            percent: pct,
+                            speed: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    let _ = stderr_thread.join();
+    let _ = stdout_thread.join();
+    let status = child.wait().map_err(|err| err.to_string())?;
     if !status.success() {
         return Err("ffmpeg no pudo convertir el audio a MP3".to_string());
     }
     Ok(())
+}
+
+/// Parsea la duración del encabezado de ffmpeg: `00:03:45.12, start: …` →
+/// segundos.
+fn parse_ffmpeg_duration(rest: &str) -> Option<f64> {
+    let mut parts = rest.split(':');
+    let hours: f64 = parts.next()?.trim().parse().ok()?;
+    let minutes: f64 = parts.next()?.trim().parse().ok()?;
+    let secs: f64 = parts.next()?.split(',').next()?.trim().parse().ok()?;
+    Some(hours * 3600.0 + minutes * 60.0 + secs)
 }
 
 /// Baja una carátula desde una URL directa (p. ej. la portada del álbum de
@@ -4637,21 +4965,20 @@ fn friendly_ytdlp_error(stderr: &str) -> String {
     let lower = stderr.to_lowercase();
     let trimmed = stderr.trim();
     if lower.contains("http error 403") || lower.contains("http error 429") {
-        format!(
-            concat!(
-                "YouTube bloqueó la descarga (403/429). Espera un momento y reintenta.\n",
-                "Detalle: {}",
-            ),
-            trimmed
-        )
-    } else if lower.contains("unable to download video data") {
-        format!(
-            concat!(
-                "YouTube no entregó el audio de este vídeo. Espera un momento y reintenta.\n",
-                "Detalle: {}",
-            ),
-            trimmed
-        )
+        // Sin el detalle técnico ("HTTP Error 403: Forbidden"): la app ya
+        // reintentó y actualizó yt-dlp por detrás; el mensaje queda claro
+        // y sin asustar.
+        "YouTube bloqueó la descarga por un momento. Espera unos segundos y vuelve a intentarlo."
+            .to_string()
+    } else            if lower.contains("unable to download video data") {
+        "YouTube no entregó el audio de este vídeo. Espera un momento y vuelve a intentarlo."
+            .to_string()
+    } else if lower.contains("unable to rename file")
+        || lower.contains("winerror 32")
+        || lower.contains("sharing violation")
+    {
+        "El archivo descargado quedó bloqueado por el sistema un momento (antivirus). Vuelve a intentarlo."
+            .to_string()
     } else {
         trimmed.to_string()
     }
@@ -4712,7 +5039,7 @@ fn download_sync(
                 continue;
             }
             if path == title_lrc {
-                let _ = std::fs::remove_file(&path);
+                remove_file_retry(&path);
                 continue;
             }
             let lower = path
@@ -4724,20 +5051,20 @@ fn download_sync(
                 || lower.starts_with("av_raw.")
                 || lower.starts_with("av_thumb.")
             {
-                let _ = std::fs::remove_file(&path);
+                remove_file_retry(&path);
             }
         }
     }
 
     // ffmpeg: PATH o descarga automática la primera vez. Mientras se prepara
-    // no hay porcentaje real: -1 le indica a la UI un estado indeterminado
-    // (barra animada) en vez de un 0% congelado.
+    // no hay porcentaje real: se muestra 0 % (nunca negativo) hasta que
+    // arranca la descarga.
     if !has_ffmpeg() {
         let _ = app.emit(
             "download-progress",
             ProgressPayload {
                 url: url.to_string(),
-                percent: -1.0,
+                percent: 0.0,
                 speed: None,
             },
         );
@@ -4776,13 +5103,16 @@ fn download_sync(
     ];
     // Reintentos de la descarga: YouTube responde a veces con un 403
     // transitorio (detección de bots / rate-limit) que desaparece solo — la
-    // misma canción baja bien al reintentar. Se espera un momento entre
-    // intentos (2 s, 4 s…) y solo se reintenta cuando el error es de ese
-    // tipo; un fallo real (vídeo eliminado, bloqueo regional…) se devuelve
-    // tal cual. Se limpian los `.part`/`.ytdl` de cada intento para arrancar
-    // limpio (un reanudado de un intento fallido puede arrastrar basura).
-    const RAW_ATTEMPTS: usize = 3;
-    const RETRY_BASE_DELAY_SECS: u64 = 2;
+    // misma canción baja bien al reintentar. Se espera entre intentos
+    // (3 s, 6 s, 9 s… hasta ~1 minuto en total) y solo se reintenta cuando
+    // el error es de ese tipo; un fallo real (vídeo eliminado, bloqueo
+    // regional…) se devuelve tal cual. El bloqueo se suelta solo casi
+    // siempre dentro de esa ventana, así que el mensaje de error casi nunca
+    // llega a salir. Se limpian los `.part`/`.ytdl` de cada intento para
+    // arrancar limpio (un reanudado de un intento fallido puede arrastrar
+    // basura).
+    const RAW_ATTEMPTS: usize = 6;
+    const RETRY_BASE_DELAY_SECS: u64 = 3;
     let is_transient_error = |stderr: &str| {
         let lower = stderr.to_lowercase();
         lower.contains("http error 403")
@@ -4790,6 +5120,13 @@ fn download_sync(
             || lower.contains("http error 5")
             || lower.contains("unable to download video data")
             || lower.contains("temporarily unavailable")
+            // Windows: el antivirus abre el archivo recién bajado y yt-dlp
+            // no puede renombrar el `.part` (WinError 32 / sharing
+            // violation). Es temporal: en el reintento el candado ya se
+            // soltó casi siempre.
+            || lower.contains("unable to rename file")
+            || lower.contains("winerror 32")
+            || lower.contains("sharing violation")
     };
     // Bloqueo de YouTube (403/429) = candidato a binario desactualizado: si
     // los reintentos no bastan, se refresca yt-dlp y se intenta una vez más
@@ -4807,18 +5144,22 @@ fn download_sync(
     for attempt in 0..RAW_ATTEMPTS {
         cleanup_raw_attempt(&base, &stem);
         match run_with_progress(app, &raw_args, url) {
-            Ok(out) if out.status.success() => {
+            Ok((out, _)) if out.status.success() => {
                 ok = true;
                 break;
             }
-            Ok(out) => {
+            Ok((out, _)) => {
                 last_stderr = decode_ytdlp(&out.stderr);
                 if attempt + 1 == RAW_ATTEMPTS || !is_transient_error(&last_stderr) {
                     break;
                 }
                 // Espera creciente entre intentos (2 s, 4 s…): le da tiempo
-                // al bloqueo de YouTube a soltarse. La UI muestra un estado
-                // indeterminado con el aviso para que no parezca congelada.
+                // al bloqueo de YouTube a soltarse. Mientras se espera, la
+                // UI muestra un estado indeterminado con el aviso
+                // (percent -1) en vez de un porcentaje falso que subía
+                // 1 % por segundo y parecía una descarga congelada en un
+                // 2 % esperando para siempre.
+                let wait_secs = RETRY_BASE_DELAY_SECS * (attempt as u64 + 1);
                 let _ = app.emit(
                     "download-progress",
                     ProgressPayload {
@@ -4827,13 +5168,29 @@ fn download_sync(
                         speed: Some("Reintentando…".into()),
                     },
                 );
-                std::thread::sleep(std::time::Duration::from_secs(
-                    RETRY_BASE_DELAY_SECS * (attempt as u64 + 1),
-                ));
+                std::thread::sleep(std::time::Duration::from_secs(wait_secs));
+            }
+            Err(err) if is_stall_error(&err) && attempt + 1 < RAW_ATTEMPTS => {
+                // La descarga se colgó sin responder (el 0 % pegado): se
+                // cancela el intento y se reintenta solo, igual que un
+                // bloqueo — la espera da tiempo a que la red se suelte.
+                last_stderr = err;
+                let wait_secs = RETRY_BASE_DELAY_SECS * (attempt as u64 + 1);
+                let _ = app.emit(
+                    "download-progress",
+                    ProgressPayload {
+                        url: url.to_string(),
+                        percent: -1.0,
+                        speed: Some("Reintentando…".into()),
+                    },
+                );
+                std::thread::sleep(std::time::Duration::from_secs(wait_secs));
             }
             Err(err) => {
-                // No se pudo lanzar o leer yt-dlp: no es un bloqueo de
-                // YouTube, se devuelve directo (limpiando lo que haya).
+                // No se pudo lanzar o leer yt-dlp (o se colgó hasta agotar
+                // los reintentos): se devuelve directo (limpiando lo que
+                // haya), la fila pasa a "Reintentar" y la siguiente de la
+                // cola arranca.
                 cleanup_raw_attempt(&base, &stem);
                 return Err(err);
             }
@@ -4843,20 +5200,25 @@ fn download_sync(
     // cambia su API de reproducción y los binarios viejos quedan bloqueados).
     // Se baja la última versión y se intenta UNA vez más con el binario nuevo.
     if !ok && is_youtube_block(&last_stderr) {
+        // La actualización de yt-dlp tarda segundos y no hay porcentaje
+        // real: se emite el estado indeterminado (percent -1) para que la
+        // UI muestre la barra animada con el aviso en vez de un número
+        // congelado. Al reintentar, la descarga arranca en 10 % y el avance
+        // nunca retrocede.
         let _ = app.emit(
             "download-progress",
             ProgressPayload {
                 url: url.to_string(),
                 percent: -1.0,
-                speed: Some("Actualizando yt-dlp…".into()),
+                speed: Some("Reintentando…".into()),
             },
         );
         match force_update_ytdlp(app) {
             Ok(_) => {
                 cleanup_raw_attempt(&base, &stem);
                 match run_with_progress(app, &raw_args, url) {
-                    Ok(out) if out.status.success() => ok = true,
-                    Ok(out) => last_stderr = decode_ytdlp(&out.stderr),
+                    Ok((out, _)) if out.status.success() => ok = true,
+                    Ok((out, _)) => last_stderr = decode_ytdlp(&out.stderr),
                     Err(err) => {
                         cleanup_raw_attempt(&base, &stem);
                         return Err(err);
@@ -4895,15 +5257,15 @@ fn download_sync(
         );
     }
 
-    // La descarga llegó al 100 %; si toca convertir, avisar de la fase para
-    // que la UI no parezca congelada mientras ffmpeg trabaja.
+    // La descarga llegó a su tope (70 %); la conversión a MP3 ocupa el tramo
+    // 70→100 con progreso real (`convert_to_mp3` lo emite).
     if has_ffmpeg {
         let _ = app.emit(
             "download-progress",
             ProgressPayload {
                 url: url.to_string(),
-                percent: 100.0,
-                speed: Some("Convirtiendo…".into()),
+                percent: 70.0,
+                speed: None,
             },
         );
     }
@@ -4915,7 +5277,7 @@ fn download_sync(
             .and_then(|bin| bin.to_str())
             .unwrap_or("ffmpeg");
         let out_mp3 = base.join(format!("{}.mp3", sanitize_filename(title)));
-        match convert_to_mp3(ffmpeg_arg, &raw_path, &out_mp3) {
+        match convert_to_mp3(app, ffmpeg_arg, &raw_path, &out_mp3, url) {
             Ok(()) => {
                 let _ = std::fs::remove_file(&raw_path);
                 (out_mp3, true)
@@ -4934,9 +5296,31 @@ fn download_sync(
             }
         }
     } else {
-        (raw_path, false)
+        // Sin ffmpeg: el audio nativo se renombra con el nombre REAL de la
+        // canción — nunca debe quedar como "av_raw_{id}" en la biblioteca
+        // (era la "mierda" que aparecía como canción). Mismo tratamiento
+        // que cuando la conversión falla.
+        let raw_ext = raw_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("webm");
+        let renamed = base.join(format!("{}.{raw_ext}", sanitize_filename(title)));
+        let _ = std::fs::remove_file(&renamed);
+        let _ = std::fs::rename(&raw_path, &renamed);
+        (renamed, false)
     };
     let file_path = final_path.display().to_string();
+
+    // El archivo final ya está listo (convertido o renombrado): el número
+    // cierra en 100 % y la UI pasa a mostrar el check.
+    let _ = app.emit(
+        "download-progress",
+        ProgressPayload {
+            url: url.to_string(),
+            percent: 100.0,
+            speed: None,
+        },
+    );
 
     // 3) Artistas reales (p. ej. "Duki, Feid"), álbum y letra con el principal.
     let artist_clean = artist.strip_suffix(" - Topic").unwrap_or(artist).trim();
@@ -5288,11 +5672,13 @@ pub fn run() {
             pick_folder,
             pick_download_folder,
             paths_exist,
+            delete_tracks,
             read_audio_file,
             read_cover,
             read_lyrics_variants,
             yt_search,
             yt_resolve,
+            yt_artist,
             yt_playlist,
             yt_download
         ])
@@ -5773,12 +6159,14 @@ mod ytdlp_update_tests {
     }
 
     #[test]
-    fn friendly_error_explains_403_with_technical_detail() {
+    fn friendly_error_explains_403_without_technical_detail() {
+        // El mensaje de bloqueo 403/429 se acortó a un aviso claro (sin el
+        // detalle técnico "HTTP Error 403: Forbidden"): la app ya reintentó
+        // y actualizó yt-dlp por detrás antes de mostrarlo.
         let msg = friendly_ytdlp_error("ERROR: unable to download video data: HTTP Error 403: Forbidden");
-        assert!(msg.contains("403/429"));
-        assert!(msg.contains("reintenta"));
-        assert!(msg.contains("Detalle:"));
-        assert!(msg.contains("HTTP Error 403: Forbidden"));
+        assert!(msg.contains("YouTube bloqueó la descarga"));
+        assert!(msg.contains("vuelve a intentarlo"));
+        assert!(!msg.contains("403/429"));
     }
 
     #[test]
@@ -5827,6 +6215,14 @@ mod artist_resolution_tests {
         assert!(artist_name_matches("kendrick", "Kendrick Lamar"));
         // Homónimo parcial: solo comparte una palabra, no debe pasar.
         assert!(!artist_name_matches("Brennan Story", "Jon Brennan"));
+        // Mismas palabras en ORDEN INVERSO = otro artista: "Cooper Alan" no
+        // debe cazar al distinto "Alan Cooper" (el error que traía un
+        // Cooper Alan raro).
+        assert!(!artist_name_matches("Cooper Alan", "Alan Cooper"));
+        assert!(!artist_name_matches("Cooper Alan", "Alan Cooper Jr"));
+        // Superset con las palabras en orden sí pasa (canal Topic, feat.).
+        assert!(artist_name_matches("Cooper Alan", "Cooper Alan - Topic"));
+        assert!(artist_name_matches("Cooper Alan", "Cooper Alan & Friends"));
         // Artistas distintos del todo.
         assert!(!artist_name_matches("Brennan Story", "King Von"));
         assert!(!artist_name_matches("Lil Story rapper", "King Von"));
@@ -5892,5 +6288,60 @@ mod artist_resolution_tests {
             "la unión debe cubrir ~58 sencillos, no solo los 48 del oficial: {}",
             resp.singles.len()
         );
+    }
+
+    /// Regresión real: buscar "Cooper Alan" debe resolver a su discografía
+    /// (álbumes + sencillos), NO a resultados mezclados. Corre con
+    /// `cargo test -- --ignored` porque usa la API.
+    #[test]
+    #[ignore]
+    fn cooper_alan_discography_resolves_to_artist() {
+        let candidates = find_artist_candidates("Cooper Alan");
+        eprintln!("candidatos ({}) encontrados:", candidates.len());
+        for candidate in &candidates {
+            let releases = fetch_discography(&candidate.browse_id);
+            eprintln!(
+                "  '{}' browse={} subs={} releases={}",
+                candidate.name,
+                candidate.browse_id,
+                candidate.subscribers,
+                releases.len()
+            );
+            for release in releases.iter().take(4) {
+                eprintln!(
+                    "      - '{}' ({}) album={}",
+                    release.title, release.year, release.is_album
+                );
+            }
+        }
+        match artist_discography_sync("Cooper Alan") {
+            Some(resp) => {
+                eprintln!(
+                    "DISCOTECA: artista='{}' álbumes={} sencillos={} (total {})",
+                    resp.artist_name,
+                    resp.albums.len(),
+                    resp.singles.len(),
+                    resp.singles_total
+                );
+                let titles: Vec<&str> =
+                    resp.singles.iter().map(|hit| hit.title.as_str()).collect();
+                eprintln!("primeros sencillos: {:?}", &titles[..titles.len().min(15)]);
+                assert_eq!(resp.kind, "artist");
+                // El canal fan "cooper alan" (UCP-D2q2ikmNa5PZwapwLgkg) trae
+                // lanzamientos sospechosos que NO deben colarse en la
+                // discografía del real.
+                assert!(
+                    !titles
+                        .iter()
+                        .any(|title| title.eq_ignore_ascii_case("behind the smile")
+                            || title.eq_ignore_ascii_case("shame in my soul")),
+                    "no deben colarse los lanzamientos del canal fan"
+                );
+            }
+            None => {
+                eprintln!("DISCOTECA: None — cae al respaldo de canciones mezcladas");
+                panic!("Cooper Alan debe resolver a su discografía");
+            }
+        }
     }
 }

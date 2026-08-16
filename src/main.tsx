@@ -1,11 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-// Fuentes autoalojadas (sin red en runtime, ideal para Tauri):
-// Space Grotesk (display, geométrica y profesional) · Instrument Sans (cuerpo) · JetBrains Mono (datos).
-import "@fontsource-variable/space-grotesk";
+// Fuente autoalojada (sin red en runtime, ideal para Tauri): una sola
+// familia general (Instrument Sans) en toda la UI.
 import "@fontsource-variable/instrument-sans";
-import "@fontsource-variable/jetbrains-mono";
 
 import "@/styles/global.css";
 import App from "@/app/App";

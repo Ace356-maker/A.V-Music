@@ -45,10 +45,9 @@ para lo funcional: play, fila activa, sliders y foco.
 
 Autoalojada con **@fontsource** (sin red en runtime):
 
-- **Display:** `--font-display` — **Space Grotesk** (titulares, marca).
-- **Cuerpo y UI:** `--font-sans` — **Instrument Sans**.
-- **Datos:** `--font-mono` — **JetBrains Mono** (tiempos, índices, meta,
-  siempre con `tabular-nums`).
+- **Toda la UI:** `--font-sans` — **Instrument Sans**. No hay otras fuentes:
+  los datos (tiempos, índices, meta) usan la misma familia con
+  `tabular-nums`.
 
 ## Reglas de la casa
 
@@ -158,7 +157,7 @@ oscuras que tapen el contenido (parches, bandas opacas).
 ## Cómo se mantiene
 
 - Los tokens viven en `src/styles/global.css` (`@theme`). Todo color y fuente
-  debe referenciarlos (`bg-canvas`, `text-ink`, `font-display`, …).
+  debe referenciarlos (`bg-canvas`, `text-ink`, …).
 - El fondo vive en `src/components/ui/BlackHoleBackground.tsx` (video
   `/blackhole.webm` en `public/`) y se monta en `AppLayout` y en el
   reproductor maximizado (este último solo mientras está abierto).

@@ -30,6 +30,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { LyricsVariants, Track } from "@/types";
 import { cn } from "@/lib/cn";
 import { RangeSlider } from "@/components/ui/RangeSlider";
+import { LikeButton } from "@/components/ui/LikeButton";
 import { CoverCrossfade } from "@/components/ui/CoverCrossfade";
 import { SlideTitle } from "@/components/ui/SlideTitle";
 import { TrackCover } from "@/components/ui/TrackCover";
@@ -175,7 +176,7 @@ function LyricsOutLayer({
                 // leading-snug): si difieren, al cruzar se ve que las
                 // separaciones entre frases/letras se encogen o estiran.
                 // Solo fundido: nada de layout.
-                className="text-center font-display text-2xl leading-snug tracking-tight text-muted/70 md:text-3xl"
+                className="text-center text-2xl leading-snug tracking-tight text-muted/70 md:text-3xl"
               >
                 <LyricChars text={line.text} active={false} />
               </p>
@@ -742,7 +743,7 @@ export function FullPlayer({
           >
             <span
               className={cn(
-                "w-6 shrink-0 text-right font-mono text-xs tabular-nums",
+                "w-6 shrink-0 text-right text-xs tabular-nums",
                 isCurrent ? "text-ink" : "text-faint",
               )}
             >
@@ -769,7 +770,7 @@ export function FullPlayer({
             </span>
             <span
               className={cn(
-                "shrink-0 font-mono text-[11px] tabular-nums",
+                "shrink-0 text-[11px] tabular-nums",
                 isCurrent ? "text-ink" : "text-faint",
               )}
             >
@@ -875,7 +876,7 @@ export function FullPlayer({
                     >
                       {!hasLyrics ? (
                         <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                          <p className="select-none font-display text-xl font-semibold tracking-tight text-white/30">
+                          <p className="select-none text-xl font-semibold tracking-tight text-white/30">
                             No hay letra para esta canción
                           </p>
                           <p className="select-none text-sm text-white/20">
@@ -918,7 +919,7 @@ export function FullPlayer({
                                   }
                                 }}
                                 className={cn(
-                                  "text-center font-display text-2xl tracking-tight transition-all duration-300 ease-out md:text-3xl",
+                                  "text-center text-2xl tracking-tight transition-all duration-300 ease-out md:text-3xl",
                                   // Todas las frases se renderizan con el
                                   // mismo árbol de cajas (LyricChars), así el
                                   // ancho y las filas son idénticos en reposo
@@ -943,7 +944,7 @@ export function FullPlayer({
                             );
                           })}
                           {hasLyrics && !synced && (
-                            <p className="pt-4 text-center font-mono text-[11px] text-faint">
+                            <p className="pt-4 text-center text-[11px] text-faint">
                               Letra sin sincronizar
                             </p>
                           )}
@@ -1045,8 +1046,9 @@ export function FullPlayer({
 
                   {/* Crossfade real del título (como la letra y la carátula):
                       el título anterior se desvanece (capa de salida) mientras
-                      el nuevo entra con fundido + zoom. Al saltar rápido entra
-                      directo. */}
+                      el nuevo entra con fundido SOLO (av-cambio-in-fade — el
+                      zoom del av-cambio-in haría que el texto "suba" un pelín
+                      al asentarse). Al saltar rápido entra directo. */}
                   <div className="relative w-full max-w-3xl">
                     {prevTitleLayer && (
                       <div
@@ -1057,7 +1059,7 @@ export function FullPlayer({
                         <SlideTitle
                           text={prevTitleLayer.title}
                           align="center"
-                          className="font-display text-3xl font-semibold tracking-tight text-ink text-shadow-[0_0_12px_color-mix(in_srgb,white_28%,transparent)] lg:text-4xl"
+                          className="text-3xl font-semibold tracking-tight text-ink text-shadow-[0_0_12px_color-mix(in_srgb,white_28%,transparent)] lg:text-4xl"
                         />
                         {prevTitleLayer.artist && (
                           <p className="mt-1 max-w-3xl text-balance text-center text-base text-muted lg:text-lg">
@@ -1071,7 +1073,7 @@ export function FullPlayer({
                       className="flex w-full flex-col gap-0.5 text-center"
                       style={
                         prevTitleLayer
-                          ? { animation: `av-cambio-in ${fadeInMs}ms ease` }
+                          ? { animation: `av-cambio-in-fade ${fadeInMs}ms ease` }
                           : undefined
                       }
                     >
@@ -1084,7 +1086,7 @@ export function FullPlayer({
                       <SlideTitle
                         text={current.title}
                         align="center"
-                        className="font-display text-3xl font-semibold tracking-tight text-ink text-shadow-[0_0_12px_color-mix(in_srgb,white_28%,transparent)] lg:text-4xl"
+                        className="text-3xl font-semibold tracking-tight text-ink text-shadow-[0_0_12px_color-mix(in_srgb,white_28%,transparent)] lg:text-4xl"
                       />
                       {artistLine && (
                         <p className="mt-1 max-w-3xl text-balance text-center text-base text-muted lg:text-lg">
@@ -1113,8 +1115,15 @@ export function FullPlayer({
               <div className="flex items-center justify-center gap-5">
                 {/* Transporte centrado como antes: el mic vive FUERA del
                     flujo (absolute, anclado a la derecha de repetir) para
-                    alejarlo sin mover los demás botones. */}
+                    alejarlo sin mover los demás botones. El corazón de "Me
+                    gusta" va en el espejo (absolute a la izquierda, antes
+                    del shuffle) para que el transporte quede simétrico. */}
                 <div className="relative flex items-center gap-5">
+                <LikeButton
+                  trackId={current?.id ?? null}
+                  size={24}
+                  className="absolute right-full top-1/2 mr-12 -translate-y-1/2"
+                />
                 <button
                   type="button"
                   onClick={() => playerStore.toggleShuffle()}
@@ -1220,7 +1229,7 @@ export function FullPlayer({
 
             {/* Fila inferior: seek debajo de los controles, centrado */}
             <div className="flex items-center justify-center gap-3 px-8 pb-6 pt-5">
-              <span className="w-11 text-right font-mono text-[11px] tabular-nums text-ink">
+              <span className="w-11 text-right text-[11px] tabular-nums text-ink">
                 {formatDuration(shownPosition)}
               </span>
               <RangeSlider
@@ -1236,7 +1245,7 @@ export function FullPlayer({
                 dragLabel={(seekValue) => formatDuration(seekValue)}
                 className="w-full max-w-xl"
               />
-              <span className="w-11 font-mono text-[11px] tabular-nums text-ink">
+              <span className="w-11 text-[11px] tabular-nums text-ink">
                 {formatDuration(shownDuration)}
               </span>
             </div>
@@ -1247,7 +1256,7 @@ export function FullPlayer({
             degradado — nada de divisiones visibles. */}
         <aside className="flex w-80 shrink-0 flex-col">
           <div className="px-5 py-4">
-            <p className="text-center font-mono text-[10px] uppercase tracking-[0.18em] text-ink">
+            <p className="text-center text-[10px] uppercase tracking-[0.18em] text-ink">
               Cola de reproducción
             </p>
           </div>

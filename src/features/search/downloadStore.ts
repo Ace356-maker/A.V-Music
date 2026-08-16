@@ -69,9 +69,14 @@ export interface DownloadBatch {
 interface SearchState {
   /** Por URL de vídeo → progreso en vivo (yt-dlp). */
   progress: Record<string, DownloadProgress>;
-  /** Ids de las canciones descargándose AHORA mismo (pueden ser varias en
-   * paralelo: buscas otra canción y le das a descargar sin esperar). */
+  /** Ids de las canciones descargándose AHORA mismo (con la cola
+   * secuencial solo hay una a la vez). */
   active: Record<string, true>;
+  /** Cola de descargas manuales (ids de fila en orden): entran cuando ya
+   * hay una descarga en curso y arrancan una tras otra, "En cola" en la
+   * fila hasta que llega su turno. Así nunca se lanzan varias a la vez y
+   * YouTube no recibe una ráfaga de peticiones (menos 403). */
+  queue: string[];
   /** Fallos: id → mensaje de error, para que el botón diga "Reintentar". */
   failed: Record<string, string>;
   /** Lote de playlist en curso (null si no hay). */
@@ -83,6 +88,12 @@ interface SearchState {
   results: SearchHit[] | null;
   isPlaylist: boolean;
   selected: Set<string>;
+  /** Una búsqueda está en curso AHORA (sobrevive al cambio de vista: al
+   * volver a Buscar, el spin sigue hasta que termine). */
+  searching: boolean;
+  /** La última búsqueda terminó CON resultados: el botón muestra el pulgar
+   * arriba hasta que empieces a escribir de nuevo. */
+  searchDone: boolean;
 }
 
 /** Carga el mapa de descargas (id → ruta) desde localStorage, migrando el
@@ -115,6 +126,7 @@ function loadDownloaded(): Record<string, string> {
 let state: SearchState = {
   progress: {},
   active: {},
+  queue: [],
   failed: {},
   batch: null,
   downloaded: loadDownloaded(),
@@ -122,6 +134,8 @@ let state: SearchState = {
   results: null,
   isPlaylist: false,
   selected: new Set(),
+  searching: false,
+  searchDone: false,
 };
 
 const listeners = new Set<() => void>();
@@ -181,9 +195,40 @@ export const downloadStore = {
     setPartial({ active: next });
   },
 
+  /** Añade una canción al final de la cola (sin duplicados). */
+  enqueue(id: string): void {
+    if (state.queue.includes(id)) return;
+    setPartial({ queue: [...state.queue, id] });
+  },
+
+  /** Quita una canción de la cola (p. ej. si ya no está en los resultados). */
+  removeQueued(id: string): void {
+    if (!state.queue.includes(id)) return;
+    setPartial({ queue: state.queue.filter((queued) => queued !== id) });
+  },
+
+  /** Saca la siguiente canción de la cola (la primera) y la devuelve. */
+  nextQueued(): string | null {
+    const [next, ...rest] = state.queue;
+    if (!next) return null;
+    setPartial({ queue: rest });
+    return next;
+  },
+
   /** Marca una descarga como fallida (el botón pasa a decir "Reintentar"). */
   setFailed(id: string, message: string): void {
     setPartial({ failed: { ...state.failed, [id]: message } });
+  },
+
+  /** Quita el progreso guardado de una URL (al terminar la descarga, bien o
+   * mal): no quedan estados viejos — p. ej. un "Reintentando…" de un intento
+   * anterior — que reaparezcan al empezar a descargar la misma canción otra
+   * vez. */
+  clearProgress(url: string): void {
+    if (!state.progress[url]) return;
+    const next = { ...state.progress };
+    delete next[url];
+    setPartial({ progress: next });
   },
 
   /** Limpia el fallo (al reintentar o al descargar bien). */
@@ -243,12 +288,15 @@ export const downloadStore = {
     persistDownloaded();
   },
 
-  /** Actualiza la sesión de búsqueda (texto, resultados, playlist, selección). */
+  /** Actualiza la sesión de búsqueda (texto, resultados, playlist,
+   * selección, y los estados del botón: buscando / pulgar). */
   setSession(patch: {
     query?: string;
     results?: SearchHit[] | null;
     isPlaylist?: boolean;
     selected?: Set<string>;
+    searching?: boolean;
+    searchDone?: boolean;
   }): void {
     setPartial(patch);
   },

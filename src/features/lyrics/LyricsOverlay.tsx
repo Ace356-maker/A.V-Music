@@ -65,7 +65,7 @@ function LyricsOutLayer({
             {lines.map((line, index) => (
               <p
                 key={`${line.time}-${index}`}
-                className="text-center font-display text-2xl leading-snug tracking-tight text-muted/70 md:text-3xl"
+                className="text-center text-2xl leading-snug tracking-tight text-muted/70 md:text-3xl"
               >
                 {line.text}
               </p>
@@ -383,7 +383,7 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
                         lineElsRef.current[index] = el;
                       }}
                       className={cn(
-                        "text-center font-display text-2xl leading-snug tracking-tight transition-all duration-200 ease-out md:text-3xl",
+                        "text-center text-2xl leading-snug tracking-tight transition-all duration-200 ease-out md:text-3xl",
                         synced
                           ? isActive
                             ? "scale-[1.02] font-semibold text-ink"
@@ -404,7 +404,7 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
       </div>
 
       {hasLyrics && !synced && (
-        <p className="shrink-0 pb-5 text-center font-mono text-[11px] text-faint">
+        <p className="shrink-0 pb-5 text-center text-[11px] text-faint">
           Letra sin sincronizar
         </p>
       )}

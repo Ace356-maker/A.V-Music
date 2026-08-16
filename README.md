@@ -79,8 +79,8 @@ sin nubes, sin límites.
 
 La interfaz flota sobre un **agujero negro en 4K en loop**, con paneles de
 cristal translúcido (blur) y un único **acento lavanda** para lo vivo:
-reproducir, fila activa, sliders y foco. Tipografía Space Grotesk · Instrument
-Sans · JetBrains Mono. Paleta definida en tokens OKLCH (Tailwind v4):
+reproducir, fila activa, sliders y foco. Una sola tipografía general
+(Instrument Sans) en toda la UI. Paleta definida en tokens OKLCH (Tailwind v4):
 
 <p align="center">
   <img src="https://img.shields.io/badge/Lienzo-0E0718?style=flat&labelColor=0E0718" alt="Lienzo #0E0718" />

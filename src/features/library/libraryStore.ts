@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { Track } from "@/types";
 import { playerStore } from "@/features/player/playerStore";
+import { likesStore } from "@/features/library/likesStore";
 
 /**
  * Store de la biblioteca. El escaneo de metadatos lo hace Rust (`scan_folder`);
@@ -194,6 +195,50 @@ export const libraryStore = {
     // La carpeta ganó una canción: si la cola era la carpeta completa, la
     // nueva entra a la cola sin interrumpir lo que suena.
     playerStore.syncQueueWithLibrary(tracks);
+  },
+
+  /**
+   * Elimina pistas de la biblioteca (sus archivos YA se borraron en disco,
+   * p. ej. con delete_tracks o porque desaparecieron fuera de la app) y
+   * propaga el cambio: se limpian los "Me Gusta" huérfanos y el reproductor
+   * sincroniza la cola (saltando a la siguiente si la actual se fue).
+   */
+  removeTracks(paths: string[]): void {
+    const removed = new Set(paths);
+    const next = tracks.filter((track) => !removed.has(track.id));
+    if (next.length === tracks.length) return;
+    tracks = next;
+    persist();
+    emit();
+    likesStore.removeMany(removed);
+    playerStore.handleTracksRemoved(removed, next);
+  },
+
+  /**
+   * Detección de archivos borrados fuera de la app: comprueba en disco (con
+   * paths_exist, barato — sin reescanear metadatos) que las pistas sigan
+   * existiendo y quita las que ya no están. Se llama periódicamente y al
+   * volver el foco a la ventana (ver App).
+   */
+  async pruneMissing(): Promise<void> {
+    if (tracks.length === 0) return;
+    try {
+      const exists = await invoke<boolean[]>(
+        "paths_exist",
+        { paths: tracks.map((track) => track.path) },
+      );
+      const missing: string[] = [];
+      tracks.forEach((track, index) => {
+        if (!exists[index]) missing.push(track.id);
+      });
+      // Red de seguridad: si TODAS faltan es sospechoso (disco desconectado
+      // o carpeta temporalmente inaccesible) — no vaciar la biblioteca.
+      if (missing.length > 0 && missing.length < tracks.length) {
+        libraryStore.removeTracks(missing);
+      }
+    } catch {
+      // Si el chequeo falla, se conserva la biblioteca actual.
+    }
   },
 };
 

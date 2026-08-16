@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { AppLayout, type View } from "@/components/layout/AppLayout";
 import LibraryPage from "@/features/library/pages/LibraryPage";
+import LikesPage from "@/features/library/pages/LikesPage";
 import SearchPage from "@/features/search/pages/SearchPage";
 import { SplashScreen } from "@/components/ui/SplashScreen";
 import { initMediaSession } from "@/features/player/mediaSession";
@@ -30,6 +31,21 @@ export default function App() {
     });
   }, []);
 
+  // Detección de archivos borrados fuera de la app, "a tiempo real": cada
+  // 5 s se comprueba (paths_exist, barato) que las pistas de la biblioteca
+  // sigan en disco y se quitan las que ya no están — y también al volver el
+  // foco a la ventana. Las descargas y los borrados desde la app ya
+  // actualizan al instante por su cuenta.
+  useEffect(() => {
+    const timer = window.setInterval(() => void libraryStore.pruneMissing(), 5000);
+    const onFocus = (): void => void libraryStore.pruneMissing();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
   return (
     <>
       <SplashScreen show={booting} />
@@ -37,6 +53,7 @@ export default function App() {
       <AppLayout view={view} onNavigate={setView}>
         {view === "biblioteca" && <LibraryPage />}
         {view === "buscar" && <SearchPage />}
+        {view === "gusta" && <LikesPage />}
       </AppLayout>
     </>
   );
