@@ -2,8 +2,6 @@
   <img src="https://raw.githubusercontent.com/Ace356-maker/A.V-Music/main/public/logo.png" alt="A.V Music" width="150" />
 </p>
 
-<h1 align="center">🎵 A.V Music</h1>
-
 <p align="center">
   <strong>Tu música, en tu disco.</strong><br />
   Reproductor de escritorio de alto rendimiento + descargador sin cuentas.
@@ -113,7 +111,7 @@ toda la UI. Paleta definida en tokens OKLCH (Tailwind v4):
 ## ⬇️ Descarga e Instalación
 
 1. Ve a la sección de **[Releases del repositorio](https://github.com/Ace356-maker/A.V-Music/releases/latest)**.
-2. Descarga el instalador `A.V.Music_x64-setup.exe` de la última versión.
+2. Descarga el instalador `A.V.Music_x64-setup.exe` de la **última versión (v0.7.0)**.
 3. Ejecútalo: la aplicación se instala y se mantiene actualizada de forma
    100 % automática en futuras versiones.
 
