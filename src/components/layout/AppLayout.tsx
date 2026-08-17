@@ -7,8 +7,13 @@ import { cn } from "@/lib/cn";
 import { PlayerBar } from "@/features/player/components/PlayerBar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { useFullOpen } from "@/features/player/playerStore";
+import { PlaylistsSidebar } from "@/features/library/components/PlaylistsSidebar";
 
-export type View = "biblioteca" | "buscar" | "gusta";
+/**
+ * Vista actual: las tres secciones fijas (biblioteca / buscar / Me Gusta) o
+ * una playlist del usuario (objeto con su id).
+ */
+export type View = "biblioteca" | "buscar" | "gusta" | { playlist: string };
 
 // El fondo (agujero negro) es solo decorativo y va en un chunk aparte,
 // cargado mientras la pantalla de carga cubre el arranque.
@@ -73,13 +78,13 @@ export function AppLayout({ view, onNavigate, children }: AppLayoutProps) {
               />
             </header>
 
-            {/* Navegación */}
-            <nav className="flex flex-1 flex-col gap-1.5 px-3">
+            {/* Navegación (con scroll si las playlists crecen) */}
+            <nav className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3">
               {navItems.map((item) => {
                 const active = view === item.key;
                 return (
                   <button
-                    key={item.key}
+                    key={typeof item.key === "string" ? item.key : item.key.playlist}
                     type="button"
                     onClick={() => onNavigate(item.key)}
                     aria-current={active ? "page" : undefined}
@@ -114,6 +119,13 @@ export function AppLayout({ view, onNavigate, children }: AppLayoutProps) {
                   </button>
                 );
               })}
+
+              {/* Playlists del usuario: chips discretos; se crean desde el
+                  menú contextual de las pistas (clic derecho). */}
+              <PlaylistsSidebar
+                activeId={typeof view === "object" ? view.playlist : null}
+                onOpen={(id) => onNavigate({ playlist: id })}
+              />
             </nav>
 
           </aside>

@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { IconCheck, IconDownload } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconCheck,
+  IconDownload,
+} from "@tabler/icons-react";
 
 import { cn } from "@/lib/cn";
 
@@ -16,19 +20,19 @@ const CHECK_DELAY_MS = 10_000;
  * instalar: la app no se cierra de golpe. */
 const RESTART_DELAY_SEC = 5;
 
+/** Formato legible de tamaño de descarga (MB redondeados). */
+function formatMB(bytes: number): string {
+  if (bytes <= 0) return "0 MB";
+  return `${Math.round(bytes / 1024 / 1024)} MB`;
+}
+
 /**
- * Anillo de progreso circular: el icono de descarga en el centro y el anillo
- * que se llena con el porcentaje. Mientras no se sabe el tamaño total, el
- * anillo gira (indeterminado) — el icono "descargando" siempre tiene sentido.
+ * Anillo de progreso circular: el icono de estado en el centro y el anillo
+ * que se llena con el porcentaje en BLANCO (el progreso nunca es morado).
+ * Mientras no se sabe el tamaño total, el anillo gira (indeterminado).
  */
-function ProgressRing({
-  percent,
-  downloading,
-}: {
-  percent: number | null;
-  downloading: boolean;
-}) {
-  const size = 88;
+function ProgressRing({ percent, phase }: { percent: number | null; phase: Phase }) {
+  const size = 92;
   const stroke = 5;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -51,7 +55,7 @@ function ProgressRing({
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="var(--color-rule-strong)"
+          stroke="rgba(255,255,255,0.12)"
           strokeWidth={stroke}
         />
         <circle
@@ -59,7 +63,7 @@ function ProgressRing({
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="var(--color-accent)"
+          stroke="white"
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={circumference}
@@ -70,10 +74,12 @@ function ProgressRing({
         />
       </svg>
       <span className="absolute inset-0 flex items-center justify-center text-ink">
-        {downloading ? (
+        {phase === "downloading" ? (
           <IconDownload aria-hidden="true" size={30} stroke={1.5} />
-        ) : (
+        ) : phase === "installing" ? (
           <IconCheck aria-hidden="true" size={30} stroke={1.5} />
+        ) : (
+          <IconAlertTriangle aria-hidden="true" size={30} stroke={1.5} />
         )}
       </span>
     </div>
@@ -83,16 +89,19 @@ function ProgressRing({
 /**
  * Auto-actualización: al arrancar pregunta al servidor (GitHub Releases) si
  * hay una versión nueva y, si la hay, EMPIEZA A DESCARGARLA SOLA. Un modal
- * centrado (estilo del resto de la app) muestra el progreso con un anillo
- * circular y el icono de descarga en el centro; al terminar instala y
- * reinicia. La instalación es silenciosa (no abre el instalador). La tarjeta
- * es 100% automática: sin botones. Si algo falla, se cierra sola a los pocos
- * segundos y la app vuelve a comprobar en la próxima apertura.
+ * centrado muestra el progreso: anillo circular blanco + barra lineal blanca
+ * con el tamaño de descarga, en una tarjeta morada oscura semitransparente
+ * (blur). Al terminar instala y reinicia. La instalación es silenciosa (no
+ * abre el instalador). La tarjeta es 100% automática: sin botones. Si algo
+ * falla, se cierra sola a los pocos segundos y la app vuelve a comprobar en
+ * la próxima apertura.
  */
 export function UpdateChecker() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [version, setVersion] = useState("");
   const [percent, setPercent] = useState<number | null>(null);
+  const [downloadedBytes, setDownloadedBytes] = useState(0);
+  const [totalBytes, setTotalBytes] = useState(0);
   const [error, setError] = useState("");
   const [restartIn, setRestartIn] = useState<number | null>(null);
   // Evita doble arranque (StrictMode en desarrollo) de la descarga.
@@ -132,14 +141,18 @@ export function UpdateChecker() {
   async function handleDownload(update: Update): Promise<void> {
     setPhase("downloading");
     setPercent(null);
+    setDownloadedBytes(0);
+    setTotalBytes(0);
     setRestartIn(null);
     let downloaded = 0;
     let contentLength = 0;
     await update.download((event) => {
       if (event.event === "Started") {
         contentLength = event.data.contentLength ?? 0;
+        setTotalBytes(contentLength);
       } else if (event.event === "Progress") {
         downloaded += event.data.chunkLength;
+        setDownloadedBytes(downloaded);
         if (contentLength > 0) {
           setPercent(Math.min(100, Math.round((downloaded / contentLength) * 100)));
         }
@@ -194,32 +207,40 @@ export function UpdateChecker() {
       role="dialog"
       aria-modal="true"
       aria-label="Actualización disponible"
+      style={{ animation: "av-modal-backdrop-in 200ms ease-out" }}
     >
-      <div className="w-full max-w-sm rounded-xl border border-rule bg-panel-2 p-6 shadow-2xl shadow-black/60">
-        {/* Cabecera: título + versión nueva */}
+      {/* Tarjeta casi negra SEMITRANSPARENTE: solo un tinte tenue del púrpura
+          del fondo (agujero negro), sin que el morado domine; el progreso es
+          siempre blanco. Entra con fade + zoom sutil. */}
+      <div
+        className="w-full max-w-sm rounded-2xl border border-white/10 bg-[oklch(17%_0.03_300/0.6)] p-6 shadow-2xl shadow-black/60 backdrop-blur-xl"
+        style={{ animation: "av-modal-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1)" }}
+      >
+        {/* Cabecera: título + versión nueva (el icono de descarga del anillo
+            ya comunica la acción — nada de duplicados). */}
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold tracking-tight text-ink">
+          <h2 className="min-w-0 truncate text-lg font-semibold tracking-tight text-ink">
             Actualización disponible
           </h2>
-          <span className="shrink-0 rounded-sm border border-rule bg-panel px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink">
+          <span className="shrink-0 rounded-md border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold tabular-nums text-ink">
             v{version}
           </span>
         </div>
 
-        {/* Progreso: anillo + estado con altura fija estable */}
-        <div className="mt-6 flex flex-col items-center gap-4">
-          <ProgressRing percent={percent} downloading={phase === "downloading"} />
-          <div className="flex min-h-[48px] flex-col items-center justify-center text-center">
-            <p className="text-sm font-medium text-ink">
+        {/* Centro: anillo + estado */}
+        <div className="mt-6 flex flex-col items-center gap-3">
+          <ProgressRing percent={percent} phase={phase} />
+          <div className="flex min-h-[40px] flex-col items-center justify-center text-center">
+            <p className="text-sm font-semibold text-ink">
               {phase === "downloading"
-                ? "Descargando la nueva versión…"
+                ? "Actualizando A.V Music"
                 : phase === "installing"
                   ? "¡Actualización instalada!"
                   : "No se pudo actualizar"}
             </p>
-            <p className="mt-1 text-xs tabular-nums text-faint">
+            <p className="mt-1 text-xs text-faint">
               {phase === "downloading"
-                ? `${percent ?? 0}%`
+                ? "Descargando los archivos necesarios…"
                 : phase === "installing"
                   ? restartIn !== null && restartIn > 0
                     ? `Reiniciando en ${restartIn} ${restartIn === 1 ? "segundo" : "segundos"}…`
@@ -228,6 +249,30 @@ export function UpdateChecker() {
             </p>
           </div>
         </div>
+
+        {/* Barra lineal de progreso (blanca) + porcentaje pegado arriba y
+            tamaño de descarga abajo */}
+        {phase !== "error" && (
+          <div className="mt-5">
+            {phase === "downloading" && (
+              <p className="mb-2 text-center text-sm font-semibold tabular-nums text-ink">
+                {percent ?? 0}%
+              </p>
+            )}
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-white transition-[width] duration-200 ease-out"
+                style={{ width: `${percent ?? 0}%` }}
+              />
+            </div>
+            <p className="mt-2 text-center text-xs tabular-nums text-faint">
+              {phase === "downloading" && totalBytes > 0
+                ? `${formatMB(downloadedBytes)} de ${formatMB(totalBytes)}`
+                : "\u00A0"}
+            </p>
+          </div>
+        )}
+
       </div>
     </div>
   );

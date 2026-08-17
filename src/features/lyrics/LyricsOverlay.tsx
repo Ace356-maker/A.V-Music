@@ -258,12 +258,21 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
       if (!el) return 0;
       const elRect = el.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
-      const target = Math.max(
-        0,
-        container.scrollTop +
-          (elRect.top - containerRect.top) -
-          container.clientHeight / 2 +
-          elRect.height / 2,
+      // El centro se recorta al rango ALCANZABLE del scroll [0, scrollHeight -
+      // clientHeight]: sin esto, una frase pegada al final (el ♪ del outro) pide
+      // un scrollTop que el contenedor no puede dar, el ease NUNCA llega a su
+      // destino y se reinicia solo cada ~300 ms — rAF a 60 fps sin parar (CPU)
+      // y el "saltito" del símbolo final al acabar la canción.
+      const max = Math.max(0, container.scrollHeight - container.clientHeight);
+      const target = Math.min(
+        max,
+        Math.max(
+          0,
+          container.scrollTop +
+            (elRect.top - containerRect.top) -
+            container.clientHeight / 2 +
+            elRect.height / 2,
+        ),
       );
       centerCache.set(index, target);
       return target;

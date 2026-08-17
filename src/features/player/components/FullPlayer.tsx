@@ -15,6 +15,7 @@ import {
 } from "react";
 import {
   IconArrowsShuffle,
+  IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconMicrophone2,
@@ -346,14 +347,6 @@ function LyricsBlock({
   onSelectSource: (key: string) => void;
   onSeekToLine: (time: number) => void;
 }) {
-  // El selector de fuente es transparente: solo aparece al pasar el mouse
-  // por la franja superior de la letra y se oculta al salir. Al cambiar de
-  // pista se cierra solo.
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
-  useEffect(() => {
-    setSourceMenuOpen(false);
-  }, [currentId]);
-
   // La etiqueta de la fuente que se está mostrando ahora mismo: solo el nombre.
   const currentSourceLabel = useMemo(() => {
     const option = sourceOptions.find((candidate) => candidate.key === activeSourceKey);
@@ -472,69 +465,37 @@ function LyricsBlock({
       </div>
       {/* Sin desvanecidos superior/inferior: esas bandas oscuras se veían
           como divisiones — la letra va directa sobre el fondo. */}
-      {/* Selector de fuente de letra: barra pegada a la parte superior,
-          CENTRADA y más angosta que la zona de letra (no ocupa todo el
-          ancho), sin línea divisoria — flecha izquierda, la fuente actual en
-          el centro y flecha derecha. Se cambia SOLO con clic (no con hover).
-          Transparente: solo se ve al pasar el mouse por la franja superior y
-          se oculta al quitarlo, con animación suave (se despliega/pliega con
-          fundido). La franja cerrada es baja (dentro del padding de la
-          letra), así no tapa frases. */}
+      {/* Selector de fuente de letra SIEMPRE visible, flotando arriba de la
+          letra (igual que antes, sin tocar el layout): flecha izquierda, la
+          fuente actual en el centro y flecha derecha. Solo se cambia con
+          clic. La zona alrededor de la píldora deja pasar el scroll/clic a
+          la letra (pointer-events-none). */}
       {sourceOptions.length >= 1 && (
-        <div
-          className="absolute inset-x-0 top-0 z-30"
-          onMouseEnter={() => setSourceMenuOpen(true)}
-          onMouseLeave={() => setSourceMenuOpen(false)}
-        >
-          {/* Franja de hover generosa: siempre más alta que la píldora, así
-              el menú no se cierra con un movimiento pequeño del ratón.
-              Plegada captura el puntero con altura extra (más fácil de
-              abrir) y al abrir crece aún más (más difícil de ocultar). */}
-          <div
-            className={cn(
-              "overflow-hidden transition-all duration-200 ease-out",
-              sourceMenuOpen ? "max-h-36 pb-12" : "max-h-9 pb-0",
-            )}
-          >
-            <div
-              className={cn(
-                // Transparente de verdad: SIN fondo (el tinte se ve
-                // negro/gris sobre el fondo del reproductor). Solo un blur
-                // LIGERO para que la letra de atrás se vea difuminada a
-                // través, y un borde sutil para definir la píldora.
-                "mx-auto flex w-full max-w-sm items-center gap-2.5 rounded-b-2xl border border-white/10 px-3 py-2.5 backdrop-blur-md transition-all duration-200 ease-out",
-                // Se despliega hacia abajo: la píldora entra deslizándose
-                // desde el borde superior y baja hasta su sitio (en vez de
-                // solo aparecer).
-                sourceMenuOpen ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0",
-              )}
-            >
-              <button
-                type="button"
-                aria-label="Fuente de letra anterior"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  cycleSource(-1);
-                }}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white/90 transition-colors hover:bg-white/15 hover:text-white"
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-30">
+          <div className="pointer-events-auto mx-auto flex w-full max-w-[21rem] items-center gap-1.5 rounded-b-2xl border border-white/10 px-2.5 py-1.5 backdrop-blur-md">
+            <button
+              type="button"
+              aria-label="Fuente de letra anterior"
+              onClick={(event) => {
+                event.stopPropagation();
+                cycleSource(-1);
+              }}                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white/90 transition-colors hover:bg-white/15 hover:text-white"
               >
-                <IconChevronLeft aria-hidden="true" size={19} stroke={2} />
-              </button>
-              <span className="flex-1 text-center text-sm font-medium text-white">
-                {currentSourceLabel}
-              </span>
-              <button
-                type="button"
-                aria-label="Siguiente fuente de letra"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  cycleSource(1);
-                }}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white/90 transition-colors hover:bg-white/15 hover:text-white"
+                <IconChevronLeft aria-hidden="true" size={16} stroke={2} />
+            </button>
+            <span className="flex-1 text-center text-sm font-medium text-white">
+              {currentSourceLabel}
+            </span>
+            <button
+              type="button"
+              aria-label="Siguiente fuente de letra"
+              onClick={(event) => {
+                event.stopPropagation();
+                cycleSource(1);
+              }}                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white/90 transition-colors hover:bg-white/15 hover:text-white"
               >
-                <IconChevronRight aria-hidden="true" size={19} stroke={2} />
-              </button>
-            </div>
+                <IconChevronRight aria-hidden="true" size={16} stroke={2} />
+            </button>
           </div>
         </div>
       )}
@@ -562,7 +523,11 @@ function PlaybackPanel({
   onToggleLyrics: () => void;
   onClose: () => void;
 }) {
-  const { current, isPlaying, shuffle, repeat } = usePlayer();
+  const { current, isPlaying, shuffle, repeat, muted, volume } = usePlayer();
+  // Carátula de la pista actual, con carga perezosa — la misma que usa la
+  // barra minimizada: el panel ahora muestra la canción (carátula, título y
+  // artista) como la barra, para que la info no desaparezca con la letra.
+  const cover = useTrackCover(current);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [scrub, setScrub] = useState<number | null>(null);
@@ -632,22 +597,43 @@ function PlaybackPanel({
     // minimiza — la manita comunica que es clicable, sin hover visual ni
     // iconos. Como la barra minimizada, que maximiza con la misma pista.
     <div onClick={handlePlaybackPanelClick} className="shrink-0 cursor-pointer">
-      <div className="px-6 pt-4">
-        {/* Fila superior: transporte centrado (el mic/karaoke vive aquí, a
-            la derecha de repetir; el volumen vive en la cola, abajo a la
-            derecha; minimizar se hace con clic en cualquier zona del
-            reproductor o con Esc) */}
-        <div className="flex items-center justify-center gap-5">
-          {/* Transporte centrado como antes: el mic vive FUERA del flujo
-              (absolute, anclado a la derecha de repetir) para alejarlo sin
-              mover los demás botones. El corazón de "Me gusta" va en el
-              espejo (absolute a la izquierda, antes del shuffle) para que el
-              transporte quede simétrico. */}
+      <div className="flex items-center gap-4 px-6 pb-5 pt-5">
+        {/* Pista actual, como la barra minimizada: carátula + título
+            (marquee si desborda) + artista. Se recorta en ventanas angostas. */}
+        <div className="flex min-w-0 w-56 shrink-0 items-center gap-3">
+          <CoverCrossfade
+            src={cover}
+            className="h-14 w-14 shrink-0 rounded-md shadow-lg shadow-black/40"
+            fallback={
+              <div className="flex h-full w-full items-center justify-center bg-panel-2 text-faint">
+                <IconMusic aria-hidden="true" size={18} stroke={1.5} />
+              </div>
+            }
+          />
+          <div
+            key={current?.id ?? "sin-pista"}
+            className="min-w-0"
+            style={{ animation: `av-cambio-in-fade ${Math.round(FADE_SEC * 1000)}ms ease` }}
+          >
+            <SlideTitle
+              text={current?.title ?? "Sin pista"}
+              className="text-sm font-medium text-ink text-shadow-[0_0_8px_color-mix(in_srgb,white_25%,transparent)]"
+            />
+            <p className="truncate text-xs text-muted">
+              {current?.artist ?? "Elige una canción de tu biblioteca"}
+            </p>
+          </div>
+        </div>
+
+        {/* Centro: transporte arriba y seek debajo, con más aire vertical. */}
+        <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
           <div className="relative flex items-center gap-5">
+            {/* Corazón: fuera del flujo (absolute), separado a la izquierda
+                del transporte — el grupo central queda simétrico. */}
             <LikeButton
               trackId={current?.id ?? null}
-              size={24}
-              className="absolute right-full top-1/2 mr-12 -translate-y-1/2"
+              size={28}
+              className="absolute right-full top-1/2 mr-10 -translate-y-1/2"
             />
             <button
               type="button"
@@ -665,7 +651,7 @@ function PlaybackPanel({
                   : "text-muted",
               )}
             >
-              <IconArrowsShuffle aria-hidden="true" size={24} stroke={1.75} />
+              <IconArrowsShuffle aria-hidden="true" size={28} stroke={1.75} />
             </button>
             <button
               type="button"
@@ -673,7 +659,7 @@ function PlaybackPanel({
               aria-label="Anterior"
               className={cn(iconButton, "text-muted")}
             >
-              <IconPlayerSkipBackFilled aria-hidden="true" size={28} stroke={1.5} />
+              <IconPlayerSkipBackFilled aria-hidden="true" size={32} stroke={1.5} />
             </button>
             {/* Play/pausa SIN fondo y SIN caja invisible: el SVG ES el botón
                 (icono más grande, halo violeta estático, sin cambios al
@@ -687,9 +673,9 @@ function PlaybackPanel({
               className="flex items-center justify-center rounded-full text-ink drop-shadow-[0_0_12px_color-mix(in_srgb,var(--color-accent)_55%,transparent)]"
             >
               {isPlaying ? (
-                <IconPlayerPauseFilled aria-hidden="true" size={40} stroke={1.5} />
+                <IconPlayerPauseFilled aria-hidden="true" size={48} stroke={1.5} />
               ) : (
-                <IconPlayerPlayFilled aria-hidden="true" size={40} stroke={1.5} className="translate-x-px" />
+                <IconPlayerPlayFilled aria-hidden="true" size={48} stroke={1.5} className="translate-x-px" />
               )}
             </button>
             <button
@@ -698,7 +684,7 @@ function PlaybackPanel({
               aria-label="Siguiente"
               className={cn(iconButton, "text-muted")}
             >
-              <IconPlayerSkipForwardFilled aria-hidden="true" size={28} stroke={1.5} />
+              <IconPlayerSkipForwardFilled aria-hidden="true" size={32} stroke={1.5} />
             </button>
             <button
               type="button"
@@ -723,15 +709,14 @@ function PlaybackPanel({
               )}
             >
               {repeat === "one" ? (
-                <IconRepeatOnce aria-hidden="true" size={24} stroke={1.75} />
+                <IconRepeatOnce aria-hidden="true" size={28} stroke={1.75} />
               ) : (
-                <IconRepeat aria-hidden="true" size={24} stroke={1.75} />
+                <IconRepeat aria-hidden="true" size={28} stroke={1.75} />
               )}
             </button>
-
-            {/* Karaoke: fuera del flujo (absolute), a la derecha de repetir
-                con un hueco amplio — el micrófono alterna carátula ↔ letra.
-                Mismo efecto que el play. */}
+            {/* Mic: fuera del flujo (absolute), separado a la derecha del
+                transporte (como el corazón a la izquierda). Alterna carátula
+                ↔ letra. Mismo efecto que el play. */}
             <button
               type="button"
               onClick={onToggleLyrics}
@@ -740,39 +725,76 @@ function PlaybackPanel({
               // Glow BLANCO cuando está ACTIVO (como el play): el brillo
               // solo aparece al usarlo, no en reposo.
               className={cn(
-                "absolute left-full top-1/2 ml-12 flex -translate-y-1/2 items-center justify-center rounded-full",
+                "absolute left-full top-1/2 ml-10 flex -translate-y-1/2 items-center justify-center rounded-full",
                 lyricsOn
                   ? "text-ink drop-shadow-[0_0_9px_color-mix(in_srgb,white_40%,transparent)]"
                   : "text-muted",
               )}
             >
-              <IconMicrophone2 aria-hidden="true" size={24} stroke={1.75} />
+              <IconMicrophone2 aria-hidden="true" size={28} stroke={1.75} />
             </button>
           </div>
+          <div className="flex w-full max-w-xl items-center gap-3">
+            <span className="w-11 text-right text-[11px] tabular-nums text-ink">
+              {formatDuration(shownPosition)}
+            </span>
+            <RangeSlider
+              min={0}
+              max={shownDuration || 1}
+              step={0.1}
+              value={shownPosition}
+              onChange={setScrub}
+              onCommit={commitScrub}
+              onKeyDown={handleSeekKeyDown}
+              disabled={!current}
+              ariaLabel="Posición de reproducción"
+              dragLabel={(seekValue) => formatDuration(seekValue)}
+              className="flex-1"
+            />
+            <span className="w-11 text-[11px] tabular-nums text-ink">
+              {formatDuration(shownDuration)}
+            </span>
+          </div>
         </div>
-      </div>
 
-      {/* Fila inferior: seek debajo de los controles, centrado */}
-      <div className="flex items-center justify-center gap-3 px-8 pb-6 pt-5">
-        <span className="w-11 text-right text-[11px] tabular-nums text-ink">
-          {formatDuration(shownPosition)}
-        </span>
-        <RangeSlider
-          min={0}
-          max={shownDuration || 1}
-          step={0.1}
-          value={shownPosition}
-          onChange={setScrub}
-          onCommit={commitScrub}
-          onKeyDown={handleSeekKeyDown}
-          disabled={!current}
-          ariaLabel="Posición de reproducción"
-          dragLabel={(seekValue) => formatDuration(seekValue)}
-          className="w-full max-w-xl"
-        />
-        <span className="w-11 text-[11px] tabular-nums text-ink">
-          {formatDuration(shownDuration)}
-        </span>
+        {/* Volumen, como la barra minimizada (se movió de la cola al panel). */}
+        <div className="flex w-36 shrink-0 items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => playerStore.toggleMute()}
+            aria-label={muted ? "Activar sonido" : "Silenciar"}
+            aria-pressed={muted}
+            className={cn(iconButton, muted ? "text-faint" : "text-muted")}
+          >
+            <VolumeIcon
+              size={26}
+              stroke={1.75}
+              waves={volume > 0.5 ? 2 : volume > 0.25 ? 1 : 0}
+              muted={muted || volume <= 0}
+            />
+          </button>
+          <RangeSlider
+            min={0}
+            max={1}
+            step={0.01}
+            value={volume}
+            onChange={(value) => playerStore.setVolume(value)}
+            onCommit={() => playerStore.persistVolume()}
+            ariaLabel="Volumen"
+            className="w-24 shrink-0"
+          />
+        </div>
+
+        {/* Minimizar explícito, al extremo derecho (como el botón de expandir
+            de la referencia). El clic en cualquier zona también minimiza. */}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Minimizar reproductor"
+          className={cn(iconButton, "h-11 w-11 shrink-0 text-faint")}
+        >
+          <IconChevronDown aria-hidden="true" size={30} stroke={2} />
+        </button>
       </div>
     </div>
   );
@@ -781,14 +803,14 @@ function PlaybackPanel({
 const PlaybackPanelMemo = memo(PlaybackPanel);
 
 /**
- * Cola de reproducción del reproductor maximizado (con el volumen abajo).
- * Componente aparte y memoizado que se suscribe al store directamente: solo
- * se re-renderiza cuando cambia la cola, la pista actual o el volumen —
- * NUNCA con el tick de posición del panel ni con el cambio de frase de la
- * letra (antes ambos re-renderizaban la cola entera con sus carátulas).
+ * Cola de reproducción del reproductor maximizado. Componente aparte y
+ * memoizado que se suscribe al store directamente: solo se re-renderiza
+ * cuando cambia la cola o la pista actual — NUNCA con el tick de posición
+ * del panel ni con el cambio de frase de la letra (antes ambos
+ * re-renderizaban la cola entera con sus carátulas).
  */
 function QueuePanel() {
-  const { queue, current, muted, volume } = usePlayer();
+  const { queue, current } = usePlayer();
   // Estado de arrastre para reordenar la cola (drag nativo, sin librerías):
   // la fila arrastrada se atenúa y la fila destino se marca mientras se
   // pasa por encima.
@@ -888,7 +910,7 @@ function QueuePanel() {
                   isCurrent && "text-shadow-[0_0_8px_color-mix(in_srgb,white_30%,transparent)]",
                 )}
               />
-              <span className="block truncate text-xs text-muted" title={track.artist ?? undefined}>
+              <span className="block truncate text-xs text-muted">
                 {track.artist ?? "Artista desconocido"}
               </span>
             </span>
@@ -931,37 +953,6 @@ function QueuePanel() {
         className="flex-1 overflow-y-auto py-2"
         renderItem={renderQueueItem}
       />
-
-      {/* Volumen, dentro de la cola (el mic/karaoke vive ahora en el
-          transporte, a la derecha de repetir) */}
-      <div className="shrink-0 px-5 pb-6 pt-4">
-        <div className="flex items-center justify-center gap-3">
-          <button
-            type="button"
-            onClick={() => playerStore.toggleMute()}
-            aria-label={muted ? "Activar sonido" : "Silenciar"}
-            aria-pressed={muted}
-            className={cn(iconButton, muted ? "text-faint" : "text-muted")}
-          >
-            <VolumeIcon
-              size={24}
-              stroke={1.75}
-              waves={volume > 0.5 ? 2 : volume > 0.25 ? 1 : 0}
-              muted={muted || volume <= 0}
-            />
-          </button>
-          <RangeSlider
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            onChange={(value) => playerStore.setVolume(value)}
-            onCommit={() => playerStore.persistVolume()}
-            ariaLabel="Volumen"
-            className="w-24"
-          />
-        </div>
-      </div>
     </aside>
   );
 }
@@ -1293,12 +1284,21 @@ export const FullPlayer = memo(function FullPlayer({
       if (!el) return 0;
       const elRect = el.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
-      const target = Math.max(
-        0,
-        container.scrollTop +
-          (elRect.top - containerRect.top) -
-          container.clientHeight / 2 +
-          elRect.height / 2,
+      // El centro se recorta al rango ALCANZABLE del scroll [0, scrollHeight -
+      // clientHeight]: sin esto, una frase pegada al final (el ♪ del outro) pide
+      // un scrollTop que el contenedor no puede dar, el ease NUNCA llega a su
+      // destino y se reinicia solo cada ~300 ms — rAF a 60 fps sin parar (CPU)
+      // y el "saltito" del símbolo final al acabar la canción.
+      const max = Math.max(0, container.scrollHeight - container.clientHeight);
+      const target = Math.min(
+        max,
+        Math.max(
+          0,
+          container.scrollTop +
+            (elRect.top - containerRect.top) -
+            container.clientHeight / 2 +
+            elRect.height / 2,
+        ),
       );
       centerCache.set(index, target);
       return target;
@@ -1468,11 +1468,12 @@ export const FullPlayer = memo(function FullPlayer({
           <Background />
         </Suspense>
       )}
-      <div className="relative z-10 flex min-h-0 flex-1">
-        {/* Columna izquierda: ahora suena + panel de reproducción (mismo ancho) */}
-        <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+        {/* Fila superior: ahora suena (letra/carátula) + la cola, que
+            termina donde arranca el panel de reproducción de abajo. */}
+        <div className="flex min-h-0 flex-1">
           {/* Ahora suena: carátula + título, o la letra en su contenedor */}
-          <section className="flex min-h-0 flex-1 flex-col">
+          <section className="flex min-w-0 flex-1 flex-col">
             {current ? (
               // Al alternar letra ↔ carátula, la vista ENTRANTE hace un
               // fundido rápido (key = la vista): antes el cambio era
@@ -1583,18 +1584,21 @@ export const FullPlayer = memo(function FullPlayer({
             )}
           </section>
 
-          {/* Panel de reproducción: ancho = contenedor de la letra */}
-          <PlaybackPanelMemo
-            open={open}
-            lyricsOn={lyricsOn}
-            onToggleLyrics={onToggleLyrics}
-            onClose={onClose}
-          />
+          {/* Playlist de la carpeta: sin fondo de panel, fundida con el
+              degradado — nada de divisiones visibles. Termina arriba del
+              panel de reproducción (que es de ancho completo). */}
+          <QueuePanelMemo />
         </div>
 
-        {/* Playlist de la carpeta: sin fondo de panel, fundida con el
-            degradado — nada de divisiones visibles. */}
-        <QueuePanelMemo />
+        {/* Panel de reproducción a TODO el ancho de la ventana (también
+            debajo de la cola): así el transporte y el volumen aprovechan
+            todo el espacio disponible. */}
+        <PlaybackPanelMemo
+          open={open}
+          lyricsOn={lyricsOn}
+          onToggleLyrics={onToggleLyrics}
+          onClose={onClose}
+        />
       </div>
 
       {error && (

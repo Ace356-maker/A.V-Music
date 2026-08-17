@@ -21,8 +21,7 @@ const SLIDE_START_DELAY_MS = 1200;
  * "…" ni parches oscuros: nada de capas con fondo). Al volverse activa (en
  * reproducción) O al pasar el ratón por encima, arranca el deslizamiento
  * (marquee continuo, sin corte) tras la pausa inicial: cualquier fila
- * muestra su título completo al pasarle por encima. El tooltip nativo
- * (title) muestra el texto completo en todo momento.
+ * muestra su título completo al pasarle por encima.
  */
 export function SlideTitle({
   text,
@@ -78,7 +77,6 @@ export function SlideTitle({
   return (
     <span
       ref={outerRef}
-      title={text}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className={cn(
@@ -110,8 +108,7 @@ export function SlideTitle({
       </span>
       {/* Nada de capas de recorte: el título largo simplemente se corta en
           el borde del contenedor (overflow-hidden) — sin "…" ni parches
-          oscuros. El hover (o estar en reproducción) lo hace deslizar y el
-          tooltip nativo muestra el texto completo. */}
+          oscuros. El hover (o estar en reproducción) lo hace deslizar. */}
     </span>
   );
 }

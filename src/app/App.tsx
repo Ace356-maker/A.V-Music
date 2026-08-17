@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AppLayout, type View } from "@/components/layout/AppLayout";
 import LibraryPage from "@/features/library/pages/LibraryPage";
 import LikesPage from "@/features/library/pages/LikesPage";
+import PlaylistPage from "@/features/library/pages/PlaylistPage";
 import SearchPage from "@/features/search/pages/SearchPage";
 import { SplashScreen } from "@/components/ui/SplashScreen";
 import { initMediaSession } from "@/features/player/mediaSession";
@@ -57,6 +58,8 @@ export default function App() {
   const pageFor = (which: View): ReactNode => {
     if (which === "biblioteca") return <LibraryPage />;
     if (which === "buscar") return <SearchPage />;
+    // Vista de una playlist del usuario (objeto con su id).
+    if (typeof which === "object") return <PlaylistPage playlistId={which.playlist} />;
     return <LikesPage />;
   };
 

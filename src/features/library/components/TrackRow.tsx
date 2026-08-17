@@ -6,6 +6,7 @@ import { TrackCover } from "@/components/ui/TrackCover";
 import { cn } from "@/lib/cn";
 import { formatDuration } from "@/lib/format";
 import type { Track } from "@/types";
+import { TrackContextMenu } from "@/features/library/components/TrackContextMenu";
 
 
 
@@ -54,9 +55,19 @@ export function TrackRow({
   // el ratón está sobre el icono: en cuanto sale de la papelera, se
   // desarma al momento (también si el foco de teclado se va del botón).
   const [armed, setArmed] = useState(false);
+  // Menú contextual (clic derecho → añadir a playlist): null = cerrado.
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
 
   return (
-    <div className="group flex h-full w-full items-center gap-3 py-2.5">
+    <div
+      className="group flex h-full w-full items-center gap-3 py-2.5"
+      // Clic derecho: menú para añadir la canción a una playlist (o crear
+      // una nueva en línea). El menú nativo del navegador no se muestra.
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenuPos({ x: event.clientX, y: event.clientY });
+      }}
+    >
       <button
         type="button"
         onClick={() => onPlay(track)}
@@ -119,17 +130,14 @@ export function TrackRow({
                 </span>
               )}
             </span>
-            <span className="block truncate text-xs text-muted" title={track.artist ?? undefined}>
+            <span className="block truncate text-xs text-muted">
               {track.artist ?? "Artista desconocido"}
             </span>
           </span>
         </span>
         {/* Metadatos incompletos: sin álbum se muestra el título de la
             canción en vez de un guion vacío. */}
-        <span
-          className="w-44 shrink-0 truncate text-sm text-muted"
-          title={track.album?.trim() ? track.album : track.title}
-        >
+        <span className="w-44 shrink-0 truncate text-sm text-muted">
           {track.album?.trim() ? track.album : track.title}
         </span>
         <span className="w-[4.5rem] shrink-0 text-right text-sm tabular-nums text-faint">
@@ -152,7 +160,6 @@ export function TrackRow({
             onMouseLeave={() => setArmed(false)}
             onBlur={() => setArmed(false)}
             aria-label={`Borrar ${track.title}`}
-            title={`Borrar definitivamente ${track.title}`}
             className="shrink-0 text-red-400 transition-colors duration-150 animate-pulse"
           >
             <IconTrash aria-hidden="true" size={19} stroke={1.75} />
@@ -162,13 +169,15 @@ export function TrackRow({
             type="button"
             onClick={() => setArmed(true)}
             aria-label={`Eliminar ${track.title}`}
-            title="Eliminar de la biblioteca y del disco"
             className="shrink-0 text-muted transition-colors duration-150 hover:text-ink"
           >
             <IconTrash aria-hidden="true" size={19} stroke={1.75} />
           </button>
         )}
       </span>
+      {menuPos && (
+        <TrackContextMenu track={track} x={menuPos.x} y={menuPos.y} onClose={() => setMenuPos(null)} />
+      )}
     </div>
   );
 }

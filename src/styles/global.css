@@ -314,6 +314,30 @@ button:not(:disabled) {
   }
 }
 
+/* Entrada del MODAL (p. ej. actualización): el diálogo aterriza con fade +
+   zoom sutil desde el centro, mientras el fondo oscurecido aparece a la par.
+   Se aplica al montar el modal; salida no hace falta (el modal es temporal
+   y desaparece con su propio ciclo). */
+@keyframes av-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes av-modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* Título con marquee continuo (sale y vuelve a entrar) para los nombres que
    desbordan su fila. El track lleva dos copias del texto separadas por un
    gap de 16 px; el keyframe va a -50 % menos la mitad del gap (8 px), así la

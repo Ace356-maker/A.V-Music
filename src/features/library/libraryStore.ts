@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Track } from "@/types";
 import { playerStore } from "@/features/player/playerStore";
 import { likesStore } from "@/features/library/likesStore";
+import { playlistsStore } from "@/features/library/playlistsStore";
 
 /**
  * Store de la biblioteca. El escaneo de metadatos lo hace Rust (`scan_folder`);
@@ -211,6 +212,7 @@ export const libraryStore = {
     persist();
     emit();
     likesStore.removeMany(removed);
+    playlistsStore.removeMany(removed);
     playerStore.handleTracksRemoved(removed, next);
   },
 

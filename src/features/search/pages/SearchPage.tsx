@@ -781,15 +781,14 @@ export default function SearchPage() {
               "truncate text-sm",
               isTransientDownloadNotice(error) ? "text-muted" : "text-accent",
             )}
-            title={error}
           >
             {error}
           </p>
         )}
         {/* Una sola línea SIEMPRE (truncate): el mensaje nunca hace saltar
-            la lista. El texto completo queda en el tooltip (title). */}
+            la lista. */}
         {message && (
-          <p className="truncate text-sm text-muted" title={message}>
+          <p className="truncate text-sm text-muted">
             {message}
           </p>
         )}

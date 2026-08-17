@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type KeyboardEvent, type MouseEvent }
 import { getVersion } from "@tauri-apps/api/app";
 import {
   IconArrowsShuffle,
+  IconChevronUp,
   IconMicrophone2,
   IconMusic,
   IconPlayerPauseFilled,
@@ -148,7 +149,7 @@ export function PlayerBar() {
         // la zona clicable maximiza. Sin hover visual ni iconos — la manita
         // es la única pista. Solo con pista: sin ella el clic no hace nada.
         className={cn(
-          "relative flex h-21 shrink-0 items-center gap-5 px-5",
+          "relative flex h-24 shrink-0 items-center gap-5 px-5",
           current && "cursor-pointer",
         )}
       >
@@ -188,7 +189,7 @@ export function PlayerBar() {
           </p>
         </div>
         {error && (
-          <p className="hidden truncate text-xs text-accent xl:block" title={error}>
+          <p className="hidden truncate text-xs text-accent xl:block">
             No se pudo reproducir esta pista
           </p>
         )}
@@ -204,7 +205,7 @@ export function PlayerBar() {
         <div className="relative flex items-center gap-5">
           <LikeButton
             trackId={current?.id ?? null}
-            size={20}
+            size={26}
             className="absolute right-full top-1/2 mr-12 -translate-y-1/2"
           />
           <button
@@ -224,7 +225,7 @@ export function PlayerBar() {
                 : "text-muted",
             )}
           >
-            <IconArrowsShuffle aria-hidden="true" size={20} stroke={1.75} />
+            <IconArrowsShuffle aria-hidden="true" size={26} stroke={1.75} />
           </button>
           <button
             type="button"
@@ -233,7 +234,7 @@ export function PlayerBar() {
             aria-label="Anterior"
             className={cn(iconButton, "text-muted")}
           >
-            <IconPlayerSkipBackFilled aria-hidden="true" size={24} stroke={1.5} />
+            <IconPlayerSkipBackFilled aria-hidden="true" size={30} stroke={1.5} />
           </button>
           <button
             type="button"
@@ -248,9 +249,9 @@ export function PlayerBar() {
             className="flex items-center justify-center rounded-full text-ink drop-shadow-[0_0_10px_color-mix(in_srgb,var(--color-accent)_50%,transparent)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {isPlaying ? (
-              <IconPlayerPauseFilled aria-hidden="true" size={34} stroke={1.5} />
+              <IconPlayerPauseFilled aria-hidden="true" size={44} stroke={1.5} />
             ) : (
-              <IconPlayerPlayFilled aria-hidden="true" size={34} stroke={1.5} className="translate-x-px" />
+              <IconPlayerPlayFilled aria-hidden="true" size={44} stroke={1.5} className="translate-x-px" />
             )}
           </button>
           <button
@@ -260,7 +261,7 @@ export function PlayerBar() {
             aria-label="Siguiente"
             className={cn(iconButton, "text-muted")}
           >
-            <IconPlayerSkipForwardFilled aria-hidden="true" size={24} stroke={1.5} />
+            <IconPlayerSkipForwardFilled aria-hidden="true" size={30} stroke={1.5} />
           </button>
           <button
             type="button"
@@ -281,9 +282,9 @@ export function PlayerBar() {
             )}
           >
             {repeat === "one" ? (
-              <IconRepeatOnce aria-hidden="true" size={20} stroke={1.75} />
+              <IconRepeatOnce aria-hidden="true" size={26} stroke={1.75} />
             ) : (
-              <IconRepeat aria-hidden="true" size={20} stroke={1.75} />
+              <IconRepeat aria-hidden="true" size={26} stroke={1.75} />
             )}
           </button>
 
@@ -305,7 +306,7 @@ export function PlayerBar() {
                 : "text-muted",
             )}
           >
-            <IconMicrophone2 aria-hidden="true" size={22} stroke={1.75} />
+            <IconMicrophone2 aria-hidden="true" size={28} stroke={1.75} />
           </button>
         </div>
         <div className="flex w-full max-w-xl items-center gap-3">
@@ -331,8 +332,9 @@ export function PlayerBar() {
         </div>
       </div>
 
-      {/* Volumen */}
-      <div className="flex w-64 shrink-0 items-center justify-end gap-3">
+      {/* Volumen (un poco más a la izquierda para dejar sitio al botón de
+          maximizar del extremo derecho) */}
+      <div className="flex w-56 shrink-0 items-center justify-end gap-3">
         <button
           type="button"
           onClick={() => playerStore.toggleMute()}
@@ -341,7 +343,7 @@ export function PlayerBar() {
           className={cn(iconButton, muted ? "text-faint" : "text-muted")}
         >
           <VolumeIcon
-            size={22}
+            size={26}
             stroke={1.75}
             waves={volume > 0.5 ? 2 : volume > 0.25 ? 1 : 0}
             muted={muted || volume <= 0}
@@ -359,11 +361,24 @@ export function PlayerBar() {
         />
       </div>
 
+      {/* Maximizar el reproductor: flecha hacia arriba al extremo derecho
+          (como el botón de expandir de la referencia). También se maximiza
+          con clic en cualquier zona de la barra. */}
+      <button
+        type="button"
+        onClick={() => playerStore.setFullOpen(true)}
+        disabled={!current}
+        aria-label="Maximizar reproductor"
+        className={cn(iconButton, "h-11 w-11 shrink-0 text-faint")}
+      >
+        <IconChevronUp aria-hidden="true" size={30} stroke={2} />
+      </button>
+
       {/* Versión de la app: esquina inferior derecha, debajo del volumen.
           Superpuesta y sin interacción (pointer-events-none) para no
           interferir con nada de la barra. */}
       {appVersion && (
-        <span className="pointer-events-none absolute bottom-1 right-3 text-[10px] tabular-nums text-faint/70">
+        <span className="pointer-events-none absolute bottom-1 right-3 text-[10px] tabular-nums text-ink/80">
           v{appVersion}
         </span>
       )}
