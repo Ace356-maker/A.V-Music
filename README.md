@@ -55,6 +55,14 @@
 
 ---
 
+## 🆕 Lo nuevo en v0.7.1
+
+- **Reproductor maximizado afinado:** al cerrar la letra, el transporte se desliza y queda centrado debajo de la carátula grande — siempre alineado con lo que suena.
+- **Columna de pista en modo letra:** mini carátula, título y artista aparecen en el panel de reproducción solo con la letra abierta, sin duplicar lo que ya muestra la carátula grande.
+- **Volumen y minimizar al borde:** los controles se anclan al extremo derecho del panel y no roban espacio al transporte.
+
+---
+
 ## 🆕 Lo nuevo en v0.7.0
 
 - **Playlists propias:** crea, llena y organiza playlists desde el sidebar y el clic derecho de cualquier pista — sin un solo modal.
@@ -111,7 +119,7 @@ toda la UI. Paleta definida en tokens OKLCH (Tailwind v4):
 ## ⬇️ Descarga e Instalación
 
 1. Ve a la sección de **[Releases del repositorio](https://github.com/Ace356-maker/A.V-Music/releases/latest)**.
-2. Descarga el instalador `A.V.Music_x64-setup.exe` de la **última versión (v0.7.0)**.
+2. Descarga el instalador `A.V.Music_x64-setup.exe` de la **última versión (v0.7.1)**.
 3. Ejecútalo: la aplicación se instala y se mantiene actualizada de forma
    100 % automática en futuras versiones.
 
