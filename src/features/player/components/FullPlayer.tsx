@@ -597,24 +597,41 @@ function PlaybackPanel({
     // minimiza — la manita comunica que es clicable, sin hover visual ni
     // iconos. Como la barra minimizada, que maximiza con la misma pista.
     <div onClick={handlePlaybackPanelClick} className="shrink-0 cursor-pointer">
-      <div className="flex items-center gap-4 px-6 pb-5 pt-5">
-        {/* Pista actual, como la barra minimizada: carátula + título
-            (marquee si desborda) + artista. Se recorta en ventanas angostas. */}
-        <div className="flex min-w-0 w-56 shrink-0 items-center gap-3">
-          <CoverCrossfade
-            src={cover}
-            className="h-14 w-14 shrink-0 rounded-md shadow-lg shadow-black/40"
-            fallback={
-              <div className="flex h-full w-full items-center justify-center bg-panel-2 text-faint">
-                <IconMusic aria-hidden="true" size={18} stroke={1.5} />
-              </div>
-            }
-          />
-          <div
-            key={current?.id ?? "sin-pista"}
-            className="min-w-0"
-            style={{ animation: `av-cambio-in-fade ${Math.round(FADE_SEC * 1000)}ms ease` }}
-          >
+      {/* En modo letra el transporte va centrado en el panel completo; en
+          modo carátula se corre a la izquierda el ancho de la cola (mr-80)
+          para quedar centrado DEBAJO de la carátula grande (que vive en la
+          sección que excluye la cola). La columna de info es ABSOLUTA
+          (fuera del flujo): entra y sale sin mover ni un píxel al
+          transporte. */}
+      <div className="relative flex items-center gap-4 px-6 pb-5 pt-5">
+        {/* Columna de pista: mini carátula + título (marquee) + artista —
+            SOLO en modo letra. En modo carátula se colapsa ENTERA: la
+            carátula grande ya muestra el título y el artista (nada de
+            duplicados). Entra animada (desliza + fade, 300 ms) al abrir las
+            letras y el transporte queda fijo en el centro. */}
+        <div
+          aria-hidden={!lyricsOn}
+          className="absolute left-6 top-1/2 -translate-y-1/2 overflow-hidden transition-[width,opacity] duration-300 ease-out"
+          style={{
+            width: lyricsOn ? 192 : 0,
+            opacity: lyricsOn ? 1 : 0,
+          }}
+        >
+          <div className="flex w-48 shrink-0 items-center">
+            <CoverCrossfade
+              src={cover}
+              className="h-14 w-14 shrink-0 rounded-md shadow-lg shadow-black/40"
+              fallback={
+                <div className="flex h-full w-full items-center justify-center bg-panel-2 text-faint">
+                  <IconMusic aria-hidden="true" size={18} stroke={1.5} />
+                </div>
+              }
+            />
+            <div
+              key={current?.id ?? "sin-pista"}
+              className="ml-3 min-w-0"
+              style={{ animation: `av-cambio-in-fade ${Math.round(FADE_SEC * 1000)}ms ease` }}
+            >
             <SlideTitle
               text={current?.title ?? "Sin pista"}
               className="text-sm font-medium text-ink text-shadow-[0_0_8px_color-mix(in_srgb,white_25%,transparent)]"
@@ -622,11 +639,24 @@ function PlaybackPanel({
             <p className="truncate text-xs text-muted">
               {current?.artist ?? "Elige una canción de tu biblioteca"}
             </p>
+            </div>
           </div>
         </div>
 
-        {/* Centro: transporte arriba y seek debajo, con más aire vertical. */}
-        <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
+        {/* Centro: transporte arriba y seek debajo, con más aire vertical.
+            Con la letra cerrada (modo carátula), un margen derecho del
+            ancho de la cola (mr-80 = 320 px) corre el centro hacia la
+            sección izquierda: el transporte queda centrado debajo de la
+            carátula grande. Con la letra abierta ocupa el ancho completo
+            (centrado en la ventana, donde no hay carátula que alinear).
+            El margen transiciona: el transporte se desliza al cambiar de
+            vista. */}
+        <div
+          className={cn(
+            "flex min-w-0 flex-1 flex-col items-center gap-3 transition-[margin-right] duration-300 ease-out",
+            !lyricsOn && "mr-80",
+          )}
+        >
           <div className="relative flex items-center gap-5">
             {/* Corazón: fuera del flujo (absolute), separado a la izquierda
                 del transporte — el grupo central queda simétrico. */}
@@ -757,6 +787,9 @@ function PlaybackPanel({
           </div>
         </div>
 
+        {/* Volumen + minimizar: anclados al borde derecho del panel
+            (absolute), fuera del flujo — no quitan espacio al transporte. */}
+        <div className="absolute right-6 top-1/2 flex -translate-y-1/2 items-center gap-3">
         {/* Volumen, como la barra minimizada (se movió de la cola al panel). */}
         <div className="flex w-36 shrink-0 items-center justify-end gap-3">
           <button
@@ -795,6 +828,7 @@ function PlaybackPanel({
         >
           <IconChevronDown aria-hidden="true" size={30} stroke={2} />
         </button>
+        </div>
       </div>
     </div>
   );
