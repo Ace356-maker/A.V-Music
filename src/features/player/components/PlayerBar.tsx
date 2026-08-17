@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   IconArrowsShuffle,
@@ -25,20 +25,10 @@ import { playerStore, usePlayer } from "@/features/player/playerStore";
 import { FADE_SEC } from "@/features/player/audioEngine";
 
 const LYRICS_KEY = "avmusic.lyricsOn.v1";
-/** Si el reproductor maximizado estaba abierto al cerrar la app. */
-const FULL_OPEN_KEY = "avmusic.fullOpen.v1";
 
 function loadLyricsOn(): boolean {
   try {
     return localStorage.getItem(LYRICS_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function loadFullOpen(): boolean {
-  try {
-    return localStorage.getItem(FULL_OPEN_KEY) === "true";
   } catch {
     return false;
   }
@@ -51,7 +41,7 @@ function loadFullOpen(): boolean {
  * con el botón de letras, y funciona independiente de la reproducción.
  */
 export function PlayerBar() {
-  const { current, isPlaying, volume, muted, error, shuffle, repeat } = usePlayer();
+  const { current, isPlaying, volume, muted, error, shuffle, repeat, fullOpen } = usePlayer();
   // Carátula con carga perezosa desde el disco si la pista no la trae.
   const cover = useTrackCover(current);
   const [position, setPosition] = useState(0);
@@ -74,13 +64,6 @@ export function PlayerBar() {
       cancelled = true;
     };
   }, []);
-  // El modo maximizado se recuerda entre sesiones: si estaba abierto al
-  // cerrar y hay una pista restaurada, vuelve a abrir igual. Sin pista
-  // restaurada no se abre solo.
-  const [fullOpen, setFullOpen] = useState(
-    () => loadFullOpen() && Boolean(playerStore.getSnapshot().current),
-  );
-
   useEffect(() => {
     const tick = setInterval(() => {
       setPosition(playerStore.getPosition());
@@ -88,15 +71,6 @@ export function PlayerBar() {
     }, 250);
     return () => clearInterval(tick);
   }, []);
-
-  // Guardar si el reproductor estaba maximizado, para restaurarlo al abrir.
-  useEffect(() => {
-    try {
-      localStorage.setItem(FULL_OPEN_KEY, String(fullOpen));
-    } catch {
-      // Sin persistencia: solo durante la sesión.
-    }
-  }, [fullOpen]);
 
   function handleSeekKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
     if (event.key === " ") {
@@ -114,16 +88,20 @@ export function PlayerBar() {
   }
 
   // Alterna letra ↔ carátula y lo guarda: la vista maximizada se recuerda
-  // también entre sesiones de la app.
-  function toggleLyrics(): void {
-    const next = !lyricsOn;
-    setLyricsOn(next);
-    try {
-      localStorage.setItem(LYRICS_KEY, String(next));
-    } catch {
-      // Sin persistencia: la vista vive solo durante la sesión.
-    }
-  }
+  // también entre sesiones de la app. useCallback (deps vacías): el callback
+  // es estable para que el reproductor maximizado (memoizado) no se
+  // re-renderice con el reloj de 250 ms de la barra.
+  const toggleLyrics = useCallback((): void => {
+    setLyricsOn((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(LYRICS_KEY, String(next));
+      } catch {
+        // Sin persistencia: la vista vive solo durante la sesión.
+      }
+      return next;
+    });
+  }, []);
 
   // El micrófono de la barra SIEMPRE abre el reproductor con la letra: no
   // alterna, porque si la vista guardada era carátula (p. ej. de una sesión
@@ -135,7 +113,7 @@ export function PlayerBar() {
     } catch {
       // Sin persistencia: la vista vive solo durante la sesión.
     }
-    setFullOpen(true);
+    playerStore.setFullOpen(true);
   }
 
   // Clic en la zona del reproductor (todo menos botones y sliders) maximiza,
@@ -144,8 +122,14 @@ export function PlayerBar() {
     if (!current) return;
     const target = event.target as HTMLElement;
     if (target.closest("button, input, a, [role='slider']")) return;
-    setFullOpen(true);
+    playerStore.setFullOpen(true);
   }
+
+  // Minimizar el reproductor maximizado (estable para no re-renderizarlo
+  // con el reloj de 250 ms de la barra).
+  const handleFullPlayerClose = useCallback((): void => {
+    playerStore.setFullOpen(false);
+  }, []);
 
   const shownPosition = scrub ?? position;
   const shownDuration = duration || current?.durationSec || 0;
@@ -160,7 +144,13 @@ export function PlayerBar() {
     <>
       <footer
         onClick={handleBarClick}
-        className="relative flex h-21 shrink-0 items-center gap-5 px-5"
+        // Cursor de mano en toda la barra (salvo botones, inputs y sliders):
+        // la zona clicable maximiza. Sin hover visual ni iconos — la manita
+        // es la única pista. Solo con pista: sin ella el clic no hace nada.
+        className={cn(
+          "relative flex h-21 shrink-0 items-center gap-5 px-5",
+          current && "cursor-pointer",
+        )}
       >
       {/* Pista actual (clic aquí o en la zona abre el reproductor) */}
       <div className="flex min-w-0 w-72 cursor-pointer items-center gap-3">
@@ -388,8 +378,9 @@ export function PlayerBar() {
       <FullPlayer
         open={fullOpen}
         // Al minimizar se conserva la vista (letra o carátula): al volver a
-        // maximizar abre directo en como estaba.
-        onClose={() => setFullOpen(false)}
+        // maximizar abre directo en como estaba. useCallback estable: evita
+        // re-renderizar el reproductor con el reloj de la barra.
+        onClose={handleFullPlayerClose}
         lyricsOn={lyricsOn}
         onToggleLyrics={toggleLyrics}
       />

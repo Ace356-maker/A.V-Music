@@ -191,16 +191,17 @@ button:not(:disabled) {
 }
 
 /*
-  Ola de la letra, letra por letra: al activarse una frase, sus caracteres
-  suben y BAJAN SOLOS en ~0.55 s (la ola se completa y vuelve a reposo
-  mientras la frase aún suena) — nada de quedarse arriba ni de bajar de golpe
-  al quitar el foco. El retardo escalonado por carácter hace que la ola viaje
-  a lo largo de la frase. Va ACOMPASADA con el auto-scroll: ambos arrancan en
-  el mismo frame del cambio de frase y completan su movimiento principal en
-  ~0.2-0.55 s, así la frase "brota" mientras la vista la centra. Solo usa
-  transform (nada de layout); TODAS las frases se renderizan igual (mismo
-  árbol de cajas), así enfocar una nunca cambia el ancho ni las filas. El
-  elemento de la frase NO se re-monta (key estable).
+  Ola de la letra, CARÁCTER por carácter: al activarse una frase, sus
+  caracteres suben y BAJAN solos en ~0.55 s (la ola se completa y vuelve a
+  reposo mientras la frase aún suena) — nada de quedarse arriba ni de bajar
+  de golpe al quitar el foco. El retardo escalonado por carácter hace que la
+  ola VIAJE visible de inicio a fin de la frase: un movimiento leve pero
+  perceptible que recorre la frase. Va ACOMPASADA con el auto-scroll: ambos
+  arrancan en el mismo frame del cambio de frase y completan su movimiento
+  principal en ~0.2-0.55 s, así la frase "brota" mientras la vista la
+  centra. Solo usa transform (nada de layout); TODAS las frases se
+  renderizan igual (mismo árbol de cajas), así enfocar una nunca cambia el
+  ancho ni las filas. El elemento de la frase NO se re-monta (key estable).
 */
 @keyframes av-ritmo {
   0%,
@@ -218,27 +219,30 @@ button:not(:disabled) {
   white-space: nowrap;
 }
 
+/* Cada carácter es una caja animable (la ola viaja de inicio a fin de la
+   frase). Red de seguridad contra el snap: si la frase se desactiva con la
+   ola a medias (frases muy seguidas), los caracteres bajan suaves en vez de
+   saltar a su lugar. Mientras la animación corre, ella tiene prioridad;
+   esta transición solo actúa cuando se quita la clase a mitad de la ola. */
 .lyric-char {
   display: inline-block;
-  /* Red de seguridad contra el snap: si la frase se desactiva con la ola a
-     medias (frases muy seguidas), los caracteres bajan suaves en vez de
-     saltar a su lugar. Mientras la animación corre, ella tiene prioridad;
-     esta transición solo actúa cuando se quita la clase a mitad de la ola. */
   transition: transform 0.25s ease-out;
 }
 
-/* Solo la frase activa anima. will-change SOLO aquí (~unos 40 caracteres), no
-   en los cientos de caracteres de todas las frases: menos capas de
-   composición mientras el contenedor se desplaza (menos micro-jank). */
+/* Solo los caracteres de la frase activa animan, y solo en reproducción (el
+   JS no pone la clase en pausa). SIN will-change: el navegador promueve
+   cada carácter mientras anima y lo libera al terminar SU ola (escalonado) —
+   si se liberaran TODOS a la vez, el texto se re-rasterizaría junto al
+   final (las letras se ven como que se comprimen/se juntan). */
 .lyric-char-active {
   animation: av-ritmo 0.55s ease-in-out 1;
-  will-change: transform;
 }
 
 /* Glow de la frase activa en el <p> COMPLETO (una sola caja, no por
    carácter): mismo brillo, pero el hilo principal repinta un solo elemento
-   en vez de decenas durante la ola. Entra/sale suave con el transition-all
-   del <p>. */
+   en vez de decenas durante la ola. Aparece/desaparece directo (sin
+   transición de text-shadow: el blur se repintaría cada frame del cambio de
+   frase — el color del texto sí transiciona, vía transition-colors del <p>). */
 .lyric-line-active {
   /* Halo BLANCO en la frase en foco (como el título), text-shadow para que
      rodee la forma de cada letra — más presente que en el título para que
@@ -320,6 +324,20 @@ button:not(:disabled) {
   }
   to {
     transform: translateX(calc(-50% - 8px));
+  }
+}
+
+/* Parpadeo de las estrellas del fondo: SOLO opacidad en el compositor (ni
+   JS ni repintado por frame — antes un bucle rAF de 20 fps dibujaba ~200
+   sprites en canvas cada frame, el grueso de la CPU del renderer). El
+   mínimo del ciclo va por estrella vía --star-min; la máxima es 1. */
+@keyframes star-twinkle {
+  0%,
+  100% {
+    opacity: var(--star-min, 0.5);
+  }
+  50% {
+    opacity: 1;
   }
 }
 

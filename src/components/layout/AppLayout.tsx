@@ -6,6 +6,7 @@ import { lazy, Suspense } from "react";
 import { cn } from "@/lib/cn";
 import { PlayerBar } from "@/features/player/components/PlayerBar";
 import { TitleBar } from "@/components/layout/TitleBar";
+import { useFullOpen } from "@/features/player/playerStore";
 
 export type View = "biblioteca" | "buscar" | "gusta";
 
@@ -42,12 +43,18 @@ const navItems: Array<{
  * las carátulas sean los protagonistas.
  */
 export function AppLayout({ view, onNavigate, children }: AppLayoutProps) {
+  // Suscripción selectiva (no re-renderiza la app con cada cambio del
+  // reproductor): solo cuando se abre/cierra el reproductor maximizado.
+  const fullOpen = useFullOpen();
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-canvas">
       {/* Fondo (agujero negro, decorativo, sin interacción): visible en
-          toda la ventana; todo lo demás se funde con él. */}
+          toda la ventana; todo lo demás se funde con él. Cuando el
+          reproductor maximizado se abre lo TAPA por completo, así que el
+          video se pausa (paused) — nunca dos agujeros negros reproduciendo
+          a la vez, que duplicaba el consumo de CPU/GPU del fondo. */}
       <Suspense fallback={null}>
-        <Background />
+        <Background paused={fullOpen} />
       </Suspense>
 
       <div className="relative z-10 flex h-full min-h-0 flex-col">
@@ -111,7 +118,9 @@ export function AppLayout({ view, onNavigate, children }: AppLayoutProps) {
 
           </aside>
 
-          <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+          {/* relative: la vista saliente del cruce (App) se posiciona
+              absolute contra el área de contenido, no contra la ventana. */}
+          <main className="relative min-w-0 flex-1 overflow-y-auto">{children}</main>
         </div>
 
         <PlayerBar />

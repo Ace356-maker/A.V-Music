@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { AppLayout, type View } from "@/components/layout/AppLayout";
 import LibraryPage from "@/features/library/pages/LibraryPage";
@@ -13,6 +13,8 @@ import { UpdateChecker } from "@/features/updater/UpdateChecker";
  * oscuro se sienta deliberado mientras en segundo plano carga todo (escaneo
  * de la biblioteca, restauración de la sesión…). */
 const MIN_BOOT_MS = 2000;
+
+
 
 export default function App() {
   const [view, setView] = useState<View>("biblioteca");
@@ -46,14 +48,26 @@ export default function App() {
     };
   }, []);
 
+  /** Cambio instantáneo de vista — sin crossfade animado. */
+  function handleNavigate(next: View): void {
+    if (next === view) return;
+    setView(next);
+  }
+
+  const pageFor = (which: View): ReactNode => {
+    if (which === "biblioteca") return <LibraryPage />;
+    if (which === "buscar") return <SearchPage />;
+    return <LikesPage />;
+  };
+
   return (
     <>
       <SplashScreen show={booting} />
       <UpdateChecker />
-      <AppLayout view={view} onNavigate={setView}>
-        {view === "biblioteca" && <LibraryPage />}
-        {view === "buscar" && <SearchPage />}
-        {view === "gusta" && <LikesPage />}
+      <AppLayout view={view} onNavigate={handleNavigate}>
+        <div className="h-full">
+          {pageFor(view)}
+        </div>
       </AppLayout>
     </>
   );

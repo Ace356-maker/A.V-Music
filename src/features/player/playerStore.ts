@@ -12,6 +12,8 @@ import * as engine from "@/features/player/audioEngine";
 const VOLUME_KEY = "avmusic.volume.v1";
 const SHUFFLE_KEY = "avmusic.shuffle.v1";
 const REPEAT_KEY = "avmusic.repeat.v1";
+/** Si el reproductor maximizado estaba abierto al cerrar la app. */
+const FULL_OPEN_KEY = "avmusic.fullOpen.v1";
 /** Sesión de reproducción guardada: cola (por ruta), última canción y posición. */
 const SESSION_KEY = "avmusic.session.v1";
 /** Fuente de letra recordada POR CANCIÓN (id de pista → fuente): al volver a
@@ -95,6 +97,9 @@ interface PlayerState {
   selectedLyricsSource: string | null;
   /** Última fuente de letra elegida por canción (id → fuente). */
   lyricsByTrack: Record<string, string>;
+  /** El reproductor maximizado está abierto (p. ej. para pausar el fondo de
+   * la app que queda tapado). */
+  fullOpen: boolean;
   error: string | null;
 }
 
@@ -149,6 +154,14 @@ function loadRepeat(): RepeatMode {
   }
 }
 
+function loadFullOpen(): boolean {
+  try {
+    return localStorage.getItem(FULL_OPEN_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 let state: PlayerState = {
   queue: [],
   current: null,
@@ -160,6 +173,7 @@ let state: PlayerState = {
   queueSource: "manual",
   selectedLyricsSource: readSession()?.lastLyricsSource ?? null,
   lyricsByTrack: loadLyricsByTrack(),
+  fullOpen: false,
   error: null,
 };
 
@@ -494,6 +508,9 @@ export const playerStore = {
       selectedLyricsSource: session.lastLyricsSource ?? null,
       error: null,
       queueSource,
+      // El modo maximizado se restaura solo si hay pista restaurada: sin
+      // pista, el reproductor no se abre solo al arrancar.
+      fullOpen: loadFullOpen() && current !== null,
     });
     if (!current) return;
 
@@ -595,9 +612,26 @@ export const playerStore = {
   getDuration(): number {
     return engine.getDuration() ?? state.current?.durationSec ?? 0;
   },
+
+  /** Abre/cierra el reproductor maximizado y lo recuerda entre sesiones. */
+  setFullOpen(open: boolean): void {
+    setPartial({ fullOpen: open });
+    try {
+      localStorage.setItem(FULL_OPEN_KEY, String(open));
+    } catch {
+      // Sin persistencia: el modo maximizado vive solo durante la sesión.
+    }
+  },
 };
 
 /** Hook para leer el estado del reproductor desde cualquier componente. */
 export function usePlayer(): PlayerState {
   return useSyncExternalStore(playerStore.subscribe, playerStore.getSnapshot);
+}
+
+/** Suscripción selectiva: solo se re-renderiza cuando cambia `fullOpen` (no en
+ * cada cambio del reproductor — p. ej. volumen). La usa AppLayout para pausar
+ * el fondo de la app cuando el reproductor maximizado lo tapa. */
+export function useFullOpen(): boolean {
+  return useSyncExternalStore(playerStore.subscribe, () => state.fullOpen);
 }

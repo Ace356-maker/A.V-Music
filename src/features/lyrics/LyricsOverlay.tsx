@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IconChevronDown, IconMusic } from "@tabler/icons-react";
 
 import { cn } from "@/lib/cn";
@@ -20,6 +20,17 @@ const SCROLL_EASE_MAX_MS = 360;
 const SCROLL_EASE_SETTLE_MAX_MS = 700;
 /** Cuánto respetar el scroll manual antes de volver al centro. */
 const USER_SCROLL_GRACE_MS = 2500;
+/*
+  Bucle de auto-scroll BAJO DEMANDA (igual que el reproductor maximizado):
+  el rAF (60 fps) solo corre mientras hace falta — durante un ease en curso o
+  cuando la próxima frase está cerca (~500 ms, para cazar el cruce con
+  precisión de frame). En reposo baja a un sondeo barato (~10/s) y en pausa a
+  uno mínimo (~6/s, solo para detectar seeks). Antes el bucle corría a 60 fps
+  SIEMPRE, aunque la frase estuviera centrada y sin movimiento.
+*/
+const RAF_LOOKAHEAD_MS = 500;
+const IDLE_POLL_MS = 100;
+const PAUSED_POLL_MS = 150;
 /** Cruce de la LETRA al cambiar de pista: SOLO desvanecer y aparecer — la
  * vieja se desvanece en su lugar (~0.35 del fade, ease-in-out), queda un
  * breve hueco donde no hay ninguna letra (~0.42, oculta el cambio de
@@ -77,6 +88,50 @@ function LyricsOutLayer({
   );
 }
 
+/** Estado de una frase respecto a la activa: colorear igual que antes, pero
+ * calculado UNA vez en el padre para que al cambiar de frase solo
+ * re-rendericen las dos frases cuyo estado cambió (la que dejó de ser activa
+ * y la que pasó a serlo), no todas las de la letra. */
+type LyricLineState = "past" | "active" | "future";
+
+/**
+ * Una frase del visor de letras, memoizada: solo re-renderiza cuando cambia
+ * su estado (past/active/future) — al cambiar de frase, el resto de la letra
+ * no se vuelve a renderizar.
+ */
+const LyricOverlayLine = memo(function LyricOverlayLine({
+  line,
+  index,
+  state,
+  synced,
+  setLineEl,
+}: {
+  line: LrcLine;
+  index: number;
+  state: LyricLineState;
+  synced: boolean;
+  setLineEl: (el: HTMLParagraphElement | null, index: number) => void;
+}) {
+  const isActive = state === "active";
+  return (
+    <p
+      ref={(el) => setLineEl(el, index)}
+      className={cn(
+        "text-center text-2xl leading-snug tracking-tight transition-all duration-200 ease-out md:text-3xl",
+        synced
+          ? isActive
+            ? "scale-[1.02] font-semibold text-ink"
+            : state === "past"
+              ? "text-faint"
+              : "text-muted/60"
+          : "text-muted",
+      )}
+    >
+      {line.text}
+    </p>
+  );
+});
+
 /**
  * Visor de letras a pantalla completa, estilo karaoke: al abrirlo desaparecen
  * la carátula y el nombre — solo se ve la letra, con la línea que suena
@@ -90,6 +145,14 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
   // Referencias a los elementos de cada frase (por índice): el bucle de
   // auto-scroll las usa para medir el centro de la frase activa.
   const lineElsRef = useRef<(HTMLParagraphElement | null)[]>([]);
+  // Estable (useCallback): las frases memoizadas (LyricOverlayLine) solo
+  // re-renderizan cuando cambia su estado, no por el ref.
+  const setLineEl = useCallback(
+    (el: HTMLParagraphElement | null, index: number) => {
+      lineElsRef.current[index] = el;
+    },
+    [lineElsRef],
+  );
   // Frase activa resaltada, actualizada con precisión de frame por el bucle.
   const [activeLine, setActiveLine] = useState(-1);
   // Al cambiar de pista, la frase activa se reinicia en el propio render
@@ -151,23 +214,24 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
     }
   }, [open, current?.id]);
 
-  // Auto-scroll suave: UN bucle rAF continuo guiado por la posición real del
-  // motor. La frase activa se mantiene CENTRADA (se detiene en el medio); al
-  // pasar a la siguiente, un ease a DURACIÓN FIJA (cúbico: arranca rápido y
-  // frena suave) la desliza hasta el nuevo centro. A diferencia del
-  // seguimiento exponencial por frame — que iba "arrastrándose" detrás de la
-  // canción y se sentía lagueado — el ease arranca UNA sola vez por cambio de
-  // frase, llega a tiempo y se queda. Nada de scrollIntoView (encolaba
-  // scrolls nativos que se pisaban) ni de animaciones que se reinician. Los
-  // centros se miden una sola vez y se guardan en caché, así el bucle no
-  // fuerza layout cada frame. El scroll manual se respeta (rueda/trackpad/
-  // táctil) y al soltar vuelve solo al centro, suave.
+  // Auto-scroll suave: UN bucle guiado POR DEMANDA (ver las constantes
+  // RAF_LOOKAHEAD_MS / IDLE_POLL_MS / PAUSED_POLL_MS arriba), igual que el
+  // reproductor maximizado. La frase activa se mantiene CENTRADA (se detiene
+  // en el medio); al pasar a la siguiente, un ease a DURACIÓN FIJA (cúbico:
+  // arranca rápido y frena suave) la desliza hasta el nuevo centro. El ease
+  // arranca UNA sola vez por cambio de frase, llega a tiempo y se queda.
+  // Nada de scrollIntoView (encolaba scrolls nativos que se pisaban) ni de
+  // animaciones que se reinician. Los centros se miden una sola vez y se
+  // guardan en caché, así el bucle no fuerza layout cada frame. El scroll
+  // manual se respeta (rueda/trackpad/táctil) y al soltar vuelve solo al
+  // centro, suave.
   useEffect(() => {
     if (!open || !synced || lines.length === 0) return;
     const container = scrollRef.current;
     if (!container) return;
 
     let raf = 0;
+    let timeout = 0;
     let lastIndex = -1;
     let renderedActive = -1;
     let lastUserScroll = 0;
@@ -222,14 +286,45 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
     };
     window.addEventListener("resize", onResize);
 
+    /** Agenda el siguiente tick: rAF mientras hace falta (ease en curso o
+     * próxima frase cerca), sondeo barato en reposo y mínimo en pausa. */
+    const scheduleNext = (): void => {
+      const paused = !playerStore.getSnapshot().isPlaying;
+      // Ease en curso: el deslizamiento exige cada frame.
+      if (easeStart >= 0) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      // Próxima frase (incluida la primera, con lastIndex -1) dentro de la
+      // ventana de precisión: rAF para cazar el cruce con precisión de frame.
+      if (!paused) {
+        const p = playerStore.getPosition();
+        const nextIndex = lastIndex + 1;
+        if (nextIndex < lines.length && lines[nextIndex].time - p <= RAF_LOOKAHEAD_MS) {
+          raf = requestAnimationFrame(step);
+          return;
+        }
+      }
+      // Reposo: sondeo barato. En pausa, mínimo (solo para detects seeks).
+      timeout = window.setTimeout(
+        () => step(performance.now()),
+        paused ? PAUSED_POLL_MS : IDLE_POLL_MS,
+      );
+    };
+
     const step = (now: number): void => {
-      raf = requestAnimationFrame(step);
       // Mientras el motor aún carga la pista nueva, su posición es de la
       // ANTERIOR: no mover la letra nueva hasta que cargue (evita el salto).
-      if (getActiveTrackId() !== currentIdRef.current) return;
+      if (getActiveTrackId() !== currentIdRef.current) {
+        scheduleNext();
+        return;
+      }
       // Durante el cruce de la letra, no mover el scroll: la vieja se
       // desvanece en su lugar y la nueva aparece en el mismo sitio.
-      if (crossfadeActiveRef.current) return;
+      if (crossfadeActiveRef.current) {
+        scheduleNext();
+        return;
+      }
       const p = playerStore.getPosition();
 
       // Índice activo: las líneas van ordenadas por tiempo; basta avanzar
@@ -245,11 +340,15 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
         renderedActive = lastIndex;
         setActiveLine(lastIndex);
       }
-      if (lastIndex < 0) return;
+      if (lastIndex < 0) {
+        scheduleNext();
+        return;
+      }
 
       // Scroll manual en curso: respetar la vista del usuario.
       if (now - lastUserScroll < USER_SCROLL_GRACE_MS) {
         easeStart = -1; // al soltar, re-anima desde donde quedó la vista
+        scheduleNext();
         return;
       }
 
@@ -261,6 +360,7 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
         const delta = target - container.scrollTop;
         if (Math.abs(delta) < 1) {
           easeStart = -1;
+          scheduleNext();
           return;
         }
         if (!settling && Math.abs(delta) > container.clientHeight) {
@@ -269,6 +369,7 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
           // desliza suave).
           container.scrollTop = target;
           easeStart = -1;
+          scheduleNext();
           return;
         }
         // Duración proporcional a la distancia: un salto de una frase se
@@ -290,11 +391,13 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
         easeStart = -1; // llegó: se queda centrada, sin avanzar
         settling = false; // primer posicionamiento completado
       }
+      scheduleNext();
     };
 
-    raf = requestAnimationFrame(step);
+    scheduleNext();
     return () => {
       cancelAnimationFrame(raf);
+      clearTimeout(timeout);
       container.removeEventListener("wheel", markUserScroll);
       container.removeEventListener("touchstart", markUserScroll);
       window.removeEventListener("resize", onResize);
@@ -375,26 +478,22 @@ export function LyricsOverlay({ open, onClose }: { open: boolean; onClose: () =>
             ) : (
               <div className="mx-auto flex min-h-full max-w-3xl flex-col justify-center gap-5">
                 {lines.map((line, index) => {
-                  const isActive = synced && index === active;
+                  const state: LyricLineState = synced
+                    ? index === active
+                      ? "active"
+                      : index < active
+                        ? "past"
+                        : "future"
+                    : "future";
                   return (
-                    <p
+                    <LyricOverlayLine
                       key={`${line.time}-${index}`}
-                      ref={(el) => {
-                        lineElsRef.current[index] = el;
-                      }}
-                      className={cn(
-                        "text-center text-2xl leading-snug tracking-tight transition-all duration-200 ease-out md:text-3xl",
-                        synced
-                          ? isActive
-                            ? "scale-[1.02] font-semibold text-ink"
-                            : index < active
-                              ? "text-faint"
-                              : "text-muted/60"
-                          : "text-muted",
-                      )}
-                    >
-                      {line.text}
-                    </p>
+                      line={line}
+                      index={index}
+                      state={state}
+                      synced={synced}
+                      setLineEl={setLineEl}
+                    />
                   );
                 })}
               </div>
