@@ -611,10 +611,13 @@ function PlaybackPanel({
             letras y el transporte queda fijo en el centro. */}
         <div
           aria-hidden={!lyricsOn}
-          className="absolute left-6 top-1/2 -translate-y-1/2 overflow-hidden transition-[width,opacity] duration-300 ease-out"
+          className="absolute left-6 top-1/2 -translate-y-1/2"
           style={{
-            width: lyricsOn ? 192 : 0,
+            // clip-path en vez de width: la animación corre en la GPU
+            // (compositor) sin forzar reflow de layout cada frame.
+            clipPath: lyricsOn ? "inset(0 0% 0 0)" : "inset(0 100% 0 0)",
             opacity: lyricsOn ? 1 : 0,
+            transition: "clip-path 300ms ease-out, opacity 300ms ease-out",
           }}
         >
           <div className="flex w-48 shrink-0 items-center">
@@ -651,11 +654,15 @@ function PlaybackPanel({
             (centrado en la ventana, donde no hay carátula que alinear).
             El margen transiciona: el transporte se desliza al cambiar de
             vista. */}
+        {/* En modo carátula, translateX(-160px) corre el transporte a la
+            izquierda para centrarlo bajo la carátula grande; en modo letra
+            se queda en su sitio (centrado en la ventana completa). Ambos
+            valores van por GPU (transform), sin reflow. */}
         <div
-          className={cn(
-            "flex min-w-0 flex-1 flex-col items-center gap-3 transition-[margin-right] duration-300 ease-out",
-            !lyricsOn && "mr-80",
-          )}
+          className="flex min-w-0 flex-1 flex-col items-center gap-3 transition-transform duration-300 ease-out"
+          style={{
+            transform: lyricsOn ? "translateX(0)" : "translateX(-160px)",
+          }}
         >
           <div className="relative flex items-center gap-5">
             {/* Corazón: fuera del flujo (absolute), separado a la izquierda
