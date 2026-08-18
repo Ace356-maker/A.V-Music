@@ -55,6 +55,12 @@
 
 ---
 
+## 🆕 Lo nuevo en v0.7.2
+
+- **Transiciones del reproductor ahora van por GPU:** clip-path y translateX reemplazan a width y margin-right en las animaciones del panel — cero reflow, cero costo de CPU.
+
+---
+
 ## 🆕 Lo nuevo en v0.7.1
 
 - **Reproductor maximizado afinado:** al cerrar la letra, el transporte se desliza y queda centrado debajo de la carátula grande — siempre alineado con lo que suena.
@@ -119,7 +125,7 @@ toda la UI. Paleta definida en tokens OKLCH (Tailwind v4):
 ## ⬇️ Descarga e Instalación
 
 1. Ve a la sección de **[Releases del repositorio](https://github.com/Ace356-maker/A.V-Music/releases/latest)**.
-2. Descarga el instalador `A.V.Music_x64-setup.exe` de la **última versión (v0.7.1)**.
+2. Descarga el instalador `A.V.Music_x64-setup.exe` de la **última versión (v0.7.2)**.
 3. Ejecútalo: la aplicación se instala y se mantiene actualizada de forma
    100 % automática en futuras versiones.
 
