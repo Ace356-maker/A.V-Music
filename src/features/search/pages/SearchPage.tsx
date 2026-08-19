@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   IconCheck,
   IconDownload,
@@ -346,10 +346,20 @@ export default function SearchPage() {
     );
   }
 
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   async function handleSearch(event?: FormEvent): Promise<void> {
     event?.preventDefault();
-    const q = query.trim();
+    // Leer el valor REAL del DOM (no el del store): si el usuario pegó un
+    // enlace y onChange no disparó a tiempo, el store todavía tiene el
+    // texto viejo. El DOM siempre tiene lo que el usuario ve.
+    const q = (
+      searchInputRef.current?.value ?? query
+    ).trim();
     if (!q) return;
+    // Sincronizar el store con el valor real para que el input controlado
+    // no vuelva al texto viejo tras el re-render.
+    if (q !== query) downloadStore.setSession({ query: q, searchDone: false });
 
     // El estado "buscando" vive en el store de módulo: al cambiar de vista
     // y volver, el spin sigue girando hasta que la búsqueda termine. El
@@ -483,10 +493,12 @@ export default function SearchPage() {
     // Ya se está descargando esta canción (el botón de su fila lo bloquea,
     // pero el lote o un doble clic pueden llegar aquí): no lanzar otra copia.
     if (active[target.id] || active[hit.id]) return true;
-    // Ya hay una descarga en curso: esta canción entra en la cola y su fila
-    // pasa a decir "En cola"; arranca cuando termine la anterior (una a la
-    // vez, para no saturar a YouTube con peticiones en paralelo).
-    if (!opts?.batch && Object.keys(downloadStore.getSnapshot().active).length > 0) {
+    // Cola de descargas paralelas: si ya hay BATCH_CONCURRENCY descargas
+    // en vuelo, esta entra en cola y arranca cuando haya espacio.
+    if (
+      !opts?.batch &&
+      Object.keys(downloadStore.getSnapshot().active).length >= BATCH_CONCURRENCY
+    ) {
       downloadStore.enqueue(hit.id);
       return true;
     }
@@ -562,11 +574,18 @@ export default function SearchPage() {
   }
 
   /** Arranca la siguiente descarga de la cola, si la hay. */
+  /** Lanza todas las descargas en cola que quepan en el pool paralelo. */
   function startNextQueued(): void {
-    const nextId = downloadStore.nextQueued();
-    if (!nextId) return;
-    const hit = results?.find((result) => result.id === nextId);
-    if (hit) void handleDownload(hit);
+    const activeCount = Object.keys(
+      downloadStore.getSnapshot().active,
+    ).length;
+    const slots = BATCH_CONCURRENCY - activeCount;
+    for (let i = 0; i < slots; i++) {
+      const nextId = downloadStore.nextQueued();
+      if (!nextId) return;
+      const hit = results?.find((result) => result.id === nextId);
+      if (hit) void handleDownload(hit);
+    }
   }
 
   function toggleSelected(id: string): void {
@@ -598,20 +617,26 @@ export default function SearchPage() {
    * peticiones en paralelo. Salta las que ya están descargadas y resume al
    * final.
    */
-  const BATCH_CONCURRENCY = 1;
+  // 3 descargas en paralelo: 1 era demasiado lento para playlists.
+  // YouTube acepta 3-5 peticiones simultáneas sin rate-limit.
+  const BATCH_CONCURRENCY = 3;
 
-  /** Espera a que no haya ninguna descarga en curso (manual o del lote). */
-  function waitUntilIdle(): Promise<void> {
+  /** Espera a que haya espacio en la cola de descargas paralelas. */
+  function waitUntilSlotFree(): Promise<void> {
     return new Promise((resolve) => {
-      if (Object.keys(downloadStore.getSnapshot().active).length === 0) {
-        resolve();
-        return;
-      }
-      const unsubscribe = downloadStore.subscribe(() => {
-        if (Object.keys(downloadStore.getSnapshot().active).length === 0) {
-          unsubscribe();
+      const check = () => {
+        if (
+          Object.keys(downloadStore.getSnapshot().active).length <
+          BATCH_CONCURRENCY
+        ) {
           resolve();
+          return true;
         }
+        return false;
+      };
+      if (check()) return;
+      const unsubscribe = downloadStore.subscribe(() => {
+        if (check()) unsubscribe();
       });
     });
   }
@@ -636,7 +661,7 @@ export default function SearchPage() {
         const hit = pending[index];
         // Esperar a que no haya ninguna descarga en curso (una manual o la
         // anterior del lote): mientras tanto la fila muestra "En cola".
-        await waitUntilIdle();
+        await waitUntilSlotFree();
         downloadStore.setBatchDownloading(hit.id);
         const success = await handleDownload(hit, { batch: true });
         if (success) {
@@ -693,11 +718,17 @@ export default function SearchPage() {
         className="flex items-stretch gap-2 px-4"
       >
         <input
+          ref={searchInputRef}
           value={query}
           onChange={(event) =>
             // Al escribir de nuevo, el pulgar de la búsqueda anterior se
             // apaga (empieza otra búsqueda).
             downloadStore.setSession({ query: event.target.value, searchDone: false })
+          }
+          onInput={(event) =>
+            // Copiar/pegar o autocompletado del navegador: onChange no
+            // dispara, así que onInput captura el valor real del DOM.
+            downloadStore.setSession({ query: event.currentTarget.value, searchDone: false })
           }
           placeholder="Canción, artista… o pega un enlace"
           // Borde SUTIL (borde de pelo + fondo de panel translúcido), igual
@@ -710,8 +741,8 @@ export default function SearchPage() {
           // Deshabilitado también al terminar con resultados: el check
           // indica "ya se buscó" y la búsqueda se vuelve a hacer al
           // escribir de nuevo (que reactiva la lupa).
-          disabled={searching || searchDone || !query.trim()}
-          aria-label={searching ? "Buscando…" : searchDone ? "Búsqueda completada" : "Buscar"}
+          disabled={searching || !query.trim()}
+          aria-label={searching ? "Buscando…" : "Buscar"}
           // La lupa lleva el MISMO contenedor que el input: la barra se ve
           // como una unidad (campo + botón), no como dos piezas sueltas.
           // Mientras busca, la lupa se cambia por el arco del spinner; al

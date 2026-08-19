@@ -121,6 +121,55 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     cmd
 }
 
+/// Versión del plugin PO Token que descargamos. Se usa para decidir si
+/// hay que actualizarlo (el plugin se actualiza con más frecuencia que
+/// yt-dlp cuando YouTube cambia su sistema anti-bot).
+const POT_PLUGIN_VERSION: &str = "1.3.1";
+
+/// Descarga el plugin bgutil-ytdlp-pot-provider (genera PO Tokens sin
+/// navegador) al directorio de datos de la app. El PO Token es lo que
+/// YouTube usa para verificar que una petición viene de un cliente real;
+/// sin él, la descarga recibe403. El plugin usa Deno (que ya resolvemos
+/// para yt-dlp) para generar el token automáticamente.
+fn ensure_pot_plugin(data_dir: &std::path::Path) {
+    let plugins_dir = data_dir.join("yt-dlp-plugins");
+    let marker = plugins_dir.join(format!("pot-plugin-{POT_PLUGIN_VERSION}.ok"));
+    if marker.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&plugins_dir);
+    // Descargar el zip del plugin desde GitHub Releases.
+    let zip_path = data_dir.join("pot-plugin.zip");
+    let url = format!(
+        "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/download/{POT_PLUGIN_VERSION}/bgutil-ytdlp-pot-provider.zip"
+    );
+    let ok = command("curl")
+        .args(["-L", "--fail", "--silent", "--show-error", "--max-time", "60", "-o"])
+        .arg(&zip_path)
+        .arg(&url)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !ok {
+        let _ = std::fs::remove_file(&zip_path);
+        return;
+    }
+    // Extraer el zip en la carpeta de plugins.
+    let extracted = command("tar")
+        .args(["-xf"])
+        .arg(&zip_path)
+        .arg("-C")
+        .arg(&plugins_dir)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    let _ = std::fs::remove_file(&zip_path);
+    if extracted {
+        // Marcar como instalado para no volver a descargarlo.
+        let _ = std::fs::write(&marker, POT_PLUGIN_VERSION);
+    }
+}
+
 /// Descarga el yt-dlp MÁS RECIENTE de GitHub al directorio de datos,
 /// sobrescribiendo el que haya (se usa tanto para la primera instalación
 /// como para refrescar un binario viejo tras un bloqueo de YouTube).
@@ -132,7 +181,11 @@ fn download_latest_ytdlp(data_dir: &std::path::Path) -> Result<std::path::PathBu
         "yt-dlp"
     };
     let local = data_dir.join(exe_name);
-    let url = format!("https://github.com/yt-dlp/yt-dlp/releases/latest/download/{exe_name}");
+    // Usar nightly builds: el equipo de yt-dlp los recomienda para la
+    // mayoría de usuarios. Contienen fixes anti-bot más recientes que el
+    // estable (p. ej. el fix de "The page needs to be reloaded" de
+    // marzo 2026). El nightly se actualiza casi a diario.
+    let url = format!("https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/{exe_name}");
     let status = command("curl")
         .args(["-L", "--fail", "--silent", "--show-error", "--max-time", "120", "-o"])
         .arg(&local)
@@ -170,11 +223,19 @@ fn download_latest_ytdlp(data_dir: &std::path::Path) -> Result<std::path::PathBu
 fn resolve_ytdlp(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     if let Ok(output) = command("yt-dlp").arg("--version").output() {
         if output.status.success() {
+            // Aun con yt-dlp en el PATH, asegurar que el plugin PO Token
+            // esté disponible: se busca en el directorio de datos de la app.
+            let Ok(data_dir) = app.path().app_data_dir() else {
+                return Ok(std::path::PathBuf::from("yt-dlp"));
+            };
+            ensure_pot_plugin(&data_dir);
             return Ok(std::path::PathBuf::from("yt-dlp"));
         }
     }
 
     let data_dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
+    // Asegurar que el plugin PO Token esté descargado y listo.
+    ensure_pot_plugin(&data_dir);
     let local = data_dir.join(if cfg!(windows) {
         "yt-dlp.exe"
     } else {
@@ -320,17 +381,25 @@ fn resolve_deno(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Argumentos `--js-runtimes` para yt-dlp si hay deno disponible (sin él,
-/// las versiones nuevas de yt-dlp no pueden extraer de YouTube → 403).
-fn js_runtime_args(app: &tauri::AppHandle) -> Vec<String> {
+/// Argumentos comunes que se pasan a TODAS las llamadas de yt-dlp:
+/// - `--js-runtimes`: necesario para que yt-dlp extraiga de YouTube sin 403.
+/// - `--plugin-dirs`: apunta al plugin PO Token (bgutil) que generamos
+///   automáticamente sin navegador. Sin este plugin, YouTube rechaza las
+///   descargas de la mayoría de IPs con403.
+fn common_ytdlp_args(app: &tauri::AppHandle) -> Vec<String> {
+    let mut args = Vec::new();
     if let Some(deno) = resolve_deno(app) {
-        vec![
-            "--js-runtimes".to_string(),
-            format!("deno:{}", deno.display()),
-        ]
-    } else {
-        Vec::new()
+        args.push("--js-runtimes".to_string());
+        args.push(format!("deno:{}", deno.display()));
     }
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let plugins_dir = data_dir.join("yt-dlp-plugins");
+        if plugins_dir.is_dir() {
+            args.push("--plugin-dirs".to_string());
+            args.push(plugins_dir.display().to_string());
+        }
+    }
+    args
 }
 
 /// Ejecuta `yt-dlp` (PATH o descargado) y devuelve la salida. `PYTHONUTF8=1`
@@ -338,10 +407,10 @@ fn js_runtime_args(app: &tauri::AppHandle) -> Vec<String> {
 /// rompe las tildes si no), para que títulos y artistas lleguen intactos.
 fn ytdlp(app: &tauri::AppHandle, args: &[&str]) -> Result<std::process::Output, String> {
     let binary = resolve_ytdlp(app)?;
-    let runtime_args = js_runtime_args(app);
+    let extra_args = common_ytdlp_args(app);
     command(binary)
         .env("PYTHONUTF8", "1")
-        .args(&runtime_args)
+        .args(&extra_args)
         .args(args)
         .output()
         .map_err(|err| format!("No se pudo ejecutar yt-dlp: {err}"))
@@ -2738,7 +2807,7 @@ fn resolve_sync(app: &tauri::AppHandle, url: &str) -> Result<SearchHit, String> 
 /// líneas cada 1-2 s durante la descarga real, así que 30 s de silencio son
 /// casi siempre una red muerta o una detección de bots — la descarga que
 /// quedaba pegada en 0 % para siempre.
-const STALL_TIMEOUT_SECS: u64 = 30;
+const STALL_TIMEOUT_SECS: u64 = 60;
 /// Mensaje de descarga colgada: lo usa el reintento automático (se trata
 /// como transitorio) y la UI para mostrarlo como aviso, no como error grave.
 const STALL_MSG: &str = "La descarga se quedó sin respuesta y se canceló.";
@@ -2773,10 +2842,10 @@ fn run_with_progress(
     use std::sync::mpsc;
 
     let binary = resolve_ytdlp(app)?;
-    let runtime_args = js_runtime_args(app);
+    let extra_args = common_ytdlp_args(app);
     let mut child = command(binary)
         .env("PYTHONUTF8", "1")
-        .args(&runtime_args)
+        .args(&extra_args)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -3530,11 +3599,9 @@ fn fetch_lyrics(artist: &str, title: &str, duration_sec: Option<u64>) -> Option<
 /// El álbum es el nombre real de la canción Topic (p. ej. "Temporada de
 /// Reggaetón 2"), que se incrusta en el tag del MP3.
 /// Metadatos de una canción para la descarga: el artista del tag del MP3
-/// (solo el principal, sin créditos de producción), la lista COMPLETA de
-/// intérpretes para buscar la letra (principal + colaboradores) y el álbum.
+/// (solo el principal, sin créditos de producción) y el álbum.
 struct SongMeta {
     artist_tag: String,
-    artists_for_lyrics: String,
     album: Option<String>,
 }
 
@@ -3722,7 +3789,6 @@ fn fetch_meta(app: &tauri::AppHandle, url: &str, title: &str) -> Option<SongMeta
         })
         .unwrap_or_default();
 
-    let is_topic = channel.to_lowercase().ends_with(" - topic");
     // El canal Topic de una colaboración lista a TODOS los intérpretes
     // ("Fuego, Manuel Turizo, Duki - Topic"): nómina oficial de cantantes,
     // sin productores ni compositores.
@@ -3772,23 +3838,8 @@ fn fetch_meta(app: &tauri::AppHandle, url: &str, title: &str) -> Option<SongMeta
     } else {
         Some(album_raw.to_string())
     };
-    // Para la búsqueda de letras: TODOS los intérpretes conocidos, igual que
-    // el tag (o el respaldo de siempre si no llegó el og), para que LRCLIB y
-    // Musixmatch reconozcan la versión con colaboradores.
-    let artists_for_lyrics = if og_performers.is_empty() {
-        if is_topic && channel_singers.len() >= 2 {
-            channel_singers.join(", ")
-        } else if all.is_empty() {
-            artist_tag.clone()
-        } else {
-            all.iter().take(3).cloned().collect::<Vec<String>>().join(", ")
-        }
-    } else {
-        artist_tag.clone()
-    };
     Some(SongMeta {
         artist_tag,
-        artists_for_lyrics,
         album,
     })
 }
@@ -4957,6 +5008,65 @@ fn cleanup_leftovers(file_path: &std::path::Path) {
     }
 }
 
+/// Detecta el navegador instalado del usuario para pasar cookies a yt-dlp.
+/// YouTube requiere autenticación para evitar bots: pasar cookies del
+/// navegador autenticado es la solución más efectiva para el 403.
+/// Devuelve "chrome", "edge" o "firefox" si detecta alguno; `None` si
+/// no encuentra ninguno (el usuario no tiene navegador compatible).
+fn detect_browser() -> Option<&'static str> {
+    // En Windows: Chrome y Edge están en AppData/Local, Firefox en %APPDATA%.
+    // En macOS: ~/Library/Application Support, en Linux: ~/.config.
+    if cfg!(windows) {
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        // Chrome: el más común, se prueba primero.
+        let chrome = std::path::PathBuf::from(format!("{local}/Google/Chrome/User Data/Default/Cookies"));
+        if chrome.exists() {
+            return Some("chrome");
+        }
+        // Edge: viene preinstalado en Windows.
+        let edge = std::path::PathBuf::from(format!("{local}/Microsoft/Edge/User Data/Default/Cookies"));
+        if edge.exists() {
+            return Some("edge");
+        }
+        // Firefox: perfil en %APPDATA%/Mozilla/Firefox/Profiles.
+        let ff_profiles = std::path::PathBuf::from(format!("{appdata}/Mozilla/Firefox/Profiles"));
+        if ff_profiles.is_dir() {
+            return Some("firefox");
+        }
+    } else if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let chrome = std::path::PathBuf::from(format!("{home}/Library/Application Support/Google/Chrome/Default/Cookies"));
+        if chrome.exists() {
+            return Some("chrome");
+        }
+        let edge = std::path::PathBuf::from(format!("{home}/Library/Application Support/Microsoft Edge/Default/Cookies"));
+        if edge.exists() {
+            return Some("edge");
+        }
+        let ff = std::path::PathBuf::from(format!("{home}/Library/Application Support/Firefox/Profiles"));
+        if ff.is_dir() {
+            return Some("firefox");
+        }
+    } else {
+        // Linux.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let chrome = std::path::PathBuf::from(format!("{home}/.config/google-chrome/Default/Cookies"));
+        if chrome.exists() {
+            return Some("chrome");
+        }
+        let edge = std::path::PathBuf::from(format!("{home}/.config/microsoft-edge/Default/Cookies"));
+        if edge.exists() {
+            return Some("edge");
+        }
+        let ff = std::path::PathBuf::from(format!("{home}/.mozilla/firefox"));
+        if ff.is_dir() {
+            return Some("firefox");
+        }
+    }
+    None
+}
+
 /// Convierte el stderr crudo de yt-dlp en un mensaje claro para la UI:
 /// explica qué pasó y qué hizo la app (reintentos + actualización de
 /// yt-dlp) sin perder el detalle técnico. Los errores que no son bloqueos
@@ -4965,13 +5075,17 @@ fn friendly_ytdlp_error(stderr: &str) -> String {
     let lower = stderr.to_lowercase();
     let trimmed = stderr.trim();
     if lower.contains("http error 403") || lower.contains("http error 429") {
-        // Sin el detalle técnico ("HTTP Error 403: Forbidden"): la app ya
-        // reintentó y actualizó yt-dlp por detrás; el mensaje queda claro
-        // y sin asustar.
-        "YouTube bloqueó la descarga por un momento. Espera unos segundos y vuelve a intentarlo."
+        // El 403 puede ser temporal (rate-limit) o persistente (IP marcada).
+        // La app ya reintentó, actualizó yt-dlp e intentó con player web.
+        // Si sigue fallando, el usuario debe esperar o abrir YouTube en el
+        // navegador para "desmarcar" su IP.
+        "YouTube bloqueó la descarga. Abre YouTube en tu navegador, espera 30 segundos, y vuelve a intentar."
             .to_string()
-    } else            if lower.contains("unable to download video data") {
-        "YouTube no entregó el audio de este vídeo. Espera un momento y vuelve a intentarlo."
+    } else if lower.contains("unable to download video data") {
+        "YouTube no entregó el audio de este vídeo. Abre el vídeo en tu navegador para verificar que existe, y vuelve a intentar."
+            .to_string()
+    } else if lower.contains("page needs to be reloaded") {
+        "YouTube detectó actividad sospechosa. Espera 30 segundos y vuelve a intentar."
             .to_string()
     } else if lower.contains("unable to rename file")
         || lower.contains("winerror 32")
@@ -5091,16 +5205,30 @@ fn download_sync(
     //    intermedios raros y sin depender de `-x` + `--ffmpeg-location`. El
     //    sufijo único por URL permite descargas en paralelo sin pisarse.
     let raw_template = format!("{}/av_raw_{stem}.%(ext)s", base.display());
-    let raw_args: Vec<String> = vec![
+    let mut raw_args: Vec<String> = vec![
         "--newline".into(),
         "--progress".into(),
         "-f".into(),
         "bestaudio".into(),
         "--no-playlist".into(),
+        "--socket-timeout".into(),
+        "30".into(),
+        "--retries".into(),
+        "3".into(),
+        "--fragment-retries".into(),
+        "3".into(),
         "-o".into(),
         raw_template,
-        url.to_string(),
     ];
+    // Cookies del navegador: YouTube requiere autenticación para evitar
+    // bots. Pasar cookies del navegador autenticado del usuario es la
+    // solución más efectiva contra el 403 persistente. Si no se detecta
+    // navegador, se descarga sin cookies (funciona la mayoría de las veces).
+    if let Some(browser) = detect_browser() {
+        raw_args.push("--cookies-from-browser".into());
+        raw_args.push(browser.to_string());
+    }
+    raw_args.push(url.to_string());
     // Reintentos de la descarga: YouTube responde a veces con un 403
     // transitorio (detección de bots / rate-limit) que desaparece solo — la
     // misma canción baja bien al reintentar. Se espera entre intentos
@@ -5120,6 +5248,9 @@ fn download_sync(
             || lower.contains("http error 5")
             || lower.contains("unable to download video data")
             || lower.contains("temporarily unavailable")
+            // YouTube exige recargar la página (anti-bot EJS). Es
+            // transitorio: el reintento con otro player client lo resuelve.
+            || lower.contains("page needs to be reloaded")
             // Windows: el antivirus abre el archivo recién bajado y yt-dlp
             // no puede renombrar el `.part` (WinError 32 / sharing
             // violation). Es temporal: en el reintento el candado ya se
@@ -5128,14 +5259,15 @@ fn download_sync(
             || lower.contains("winerror 32")
             || lower.contains("sharing violation")
     };
-    // Bloqueo de YouTube (403/429) = candidato a binario desactualizado: si
-    // los reintentos no bastan, se refresca yt-dlp y se intenta una vez más
-    // con la última versión antes de rendirse.
+    // Bloqueo de YouTube (403/429/page reload) = candidato a binario
+    // desactualizado: si los reintentos no bastan, se refresca yt-dlp y
+    // se intenta una vez más con la última versión antes de rendirse.
     let is_youtube_block = |stderr: &str| {
         let lower = stderr.to_lowercase();
         lower.contains("http error 403")
             || lower.contains("http error 429")
             || lower.contains("unable to download video data")
+            || lower.contains("page needs to be reloaded")
     };
     // El bucle rompe con éxito o agotando los reintentos; el error queda en
     // `last_stderr` para decidir después si conviene refrescar yt-dlp.
@@ -5232,6 +5364,64 @@ fn download_sync(
             }
         }
     }
+    // Fallback: si el 403 persiste tras actualizar yt-dlp, intentar con
+    // el player TV (no necesita PO Token) y formato worstaudio (menos
+    // propenso a ser bloqueado porque es un stream más simple). El player
+    // TV funciona bien cuando se pasan cookies del navegador.
+    if !ok && is_youtube_block(&last_stderr) {
+        let _ = app.emit(
+            "download-progress",
+            ProgressPayload {
+                url: url.to_string(),
+                percent: -1.0,
+                speed: Some("Reintentando…".into()),
+            },
+        );
+        // Intento A: mweb (mobile web, menos vigilado que el web normal,
+        // no necesita PO Token para algunos clientes).
+        let mut fallback_args = raw_args.clone();
+        let insert_pos = fallback_args
+            .iter()
+            .position(|a| a == "-o")
+            .unwrap_or(fallback_args.len());
+        fallback_args.splice(
+            insert_pos..insert_pos,
+            [
+                "--extractor-args".into(),
+                "youtube:player_client=mweb".into(),
+            ],
+        );
+        cleanup_raw_attempt(&base, &stem);
+        match run_with_progress(app, &fallback_args, url) {
+            Ok((out, _)) if out.status.success() => ok = true,
+            Ok((out, _)) => last_stderr = decode_ytdlp(&out.stderr),
+            Err(_err) => {
+                cleanup_raw_attempt(&base, &stem);
+                // Intento B: web_safari (HLS/m3u8, no necesita PO Token
+                // para GVS en algunos casos).
+                let mut fallback2 = raw_args.clone();
+                let pos2 = fallback2
+                    .iter()
+                    .position(|a| a == "-o")
+                    .unwrap_or(fallback2.len());
+                fallback2.splice(
+                    pos2..pos2,
+                    [
+                        "--extractor-args".into(),
+                        "youtube:player_client=web_safari".into(),
+                    ],
+                );
+                cleanup_raw_attempt(&base, &stem);
+                match run_with_progress(app, &fallback2, url) {
+                    Ok((out, _)) if out.status.success() => ok = true,
+                    Ok((out, _)) => last_stderr = decode_ytdlp(&out.stderr),
+                    Err(_err) => {
+                        cleanup_raw_attempt(&base, &stem);
+                    }
+                }
+            }
+        }
+    }
     if !ok {
         cleanup_raw_attempt(&base, &stem);
         return Err(friendly_ytdlp_error(&last_stderr));
@@ -5257,6 +5447,18 @@ fn download_sync(
         );
     }
 
+    // Guardia: si el archivo es demasiado pequeño (probablemente un HTML
+    // de error o una página vacía), no se intenta convertir ni renombrar.
+    let raw_size_ok = std::fs::metadata(&raw_path)
+        .map(|m| m.len() >= 10_000) // 10 KB mínimo razonable para audio
+        .unwrap_or(false);
+    if !raw_size_ok {
+        cleanup_raw_attempt(&base, &stem);
+        return Err(
+            "El archivo descargado está vacío o es demasiado pequeño. YouTube pudo haber bloqueado la descarga.".to_string(),
+        );
+    }
+
     // La descarga llegó a su tope (70 %); la conversión a MP3 ocupa el tramo
     // 70→100 con progreso real (`convert_to_mp3` lo emite).
     if has_ffmpeg {
@@ -5270,7 +5472,102 @@ fn download_sync(
         );
     }
 
+    // Duración del audio descargado: se lee del archivo crudo ANTES de la
+    // conversión para poder lanzar las búsquedas de letra en paralelo con
+    // la conversión a MP3 (la duración es la misma en webm/opus que en MP3).
+    let file_duration = read_meta(std::path::Path::new(&raw_path))
+        .map(|track| track.duration_sec)
+        .filter(|duration| *duration > 0);
+
+    // 3) Artistas reales (p. ej. "Duki, Feid"), álbum y letra: se lanza
+    //    fetch_meta en background junto con la conversión a MP3 para que
+    //    ambas corran en paralelo (fetch_meta hace yt-dlp --skip-download,
+    //    que tarda 1-3 s en conectar).
+    let artist_clean = artist.strip_suffix(" - Topic").unwrap_or(artist).trim();
+    let (meta_tx, meta_rx) = std::sync::mpsc::channel();
+    {
+        let url_clone = url.to_string();
+        let title_clone = title.to_string();
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            let _ = meta_tx.send(fetch_meta(&app_clone, &url_clone, &title_clone));
+        });
+    }
+
+    // Para buscar la letra se usa el artista COMPLETO ("George Birge, Kidd G,
+    // charlieonnafriday"): los colaboradores permiten reconocer la versión
+    // con feat. aunque el título de YouTube Music no la mencione, y que
+    // Musixmatch devuelva el remix (no la original) al matchear por artista.
+    // Se lanza con el artista del canal (fallback) mientras fetch_meta corre
+    // en background; al recibir meta se usa el artista enriquecido.
+    let title_is_variant = !split_variant(title).1.is_empty();
+    let (lrclib_tx, lrclib_rx) = std::sync::mpsc::channel();
+    let (ytmusic_tx, ytmusic_rx) = std::sync::mpsc::channel();
+    let (mxm_tx, mxm_rx) = std::sync::mpsc::channel();
+    let (thumb_tx, thumb_rx) = std::sync::mpsc::channel();
+    // Usamos el artista del canal como fallback para lanzar las letras ya;
+    // si fetch_meta trae uno mejor, las búsquedas con el fallback igual
+    // devuelven resultados (LRCLIB/Musixmatch matchean por cercanía).
+    let artist_lyrics = artist_clean.to_string();
+    let title_lyrics = title.to_string();
+    let url_owned = url.to_string();
+    let base_thumb = base.clone();
+    let stem_thumb = stem.clone();
+    let cover_owned = cover_url.map(str::to_string);
+    let app_thumb = app.clone();
+
+    // LRCLIB: se lanza YA con la duración del archivo crudo.
+    let artist_l = artist_lyrics.clone();
+    let title_l = title_lyrics.clone();
+    std::thread::spawn(move || {
+        let _ = lrclib_tx.send(fetch_lyrics(&artist_l, &title_l, file_duration));
+    });
+
+    // YouTube Music: letra sincronizada (timedLyricsModel) o plana, directo
+    // desde la página del video. Solo funciona cuando la URL es de YouTube /
+    // YouTube Music (tiene videoId).
+    let video_id_opt = extract_video_id(url);
+    std::thread::spawn(move || {
+        let result = video_id_opt
+            .as_deref()
+            .and_then(fetch_ytmusic_lyrics);
+        let _ = ytmusic_tx.send(result);
+    });
+
+    // Musixmatch: sincronizada (API de escritorio) o su plana. La plana se
+    // pide solo si la sincronizada no llegó; toda la cadena vive en este
+    // hilo.
+    let artist_m = artist_lyrics.clone();
+    let title_m = title_lyrics.clone();
+    std::thread::spawn(move || {
+        let synced = fetch_musixmatch_synced_lyrics(&artist_m, &title_m, file_duration);
+        let plain = if synced.is_none() {
+            fetch_musixmatch_lyrics(&artist_m, &title_m)
+        } else {
+            None
+        };
+        let _ = mxm_tx.send((synced, plain));
+    });
+
+    // Miniatura (solo si habrá MP3 con carátula embebida): corre a la vez
+    // que las letras y la conversión.
+    let thumb_thread = if has_ffmpeg {
+        Some(std::thread::spawn(move || {
+            let result = match cover_owned {
+                Some(cover) if !cover.trim().is_empty() => {
+                    download_cover_url(&cover, &base_thumb, &stem_thumb)
+                }
+                _ => fetch_thumbnail(&app_thumb, &url_owned, &base_thumb, &stem_thumb),
+            };
+            let _ = thumb_tx.send(result);
+        }))
+    } else {
+        None
+    };
+
     // 2) Convertir a MP3 nosotros (siempre que haya ffmpeg): garantiza MP3.
+    //    Corre EN PARALELO con fetch_meta, las letras y la miniatura — antes
+    //    eran secuenciales y todo el tiempo se sumaba.
     let (final_path, is_mp3) = if has_ffmpeg {
         let ffmpeg_arg = ffmpeg_bin
             .as_deref()
@@ -5322,103 +5619,11 @@ fn download_sync(
         },
     );
 
-    // 3) Artistas reales (p. ej. "Duki, Feid"), álbum y letra con el principal.
-    let artist_clean = artist.strip_suffix(" - Topic").unwrap_or(artist).trim();
-    let meta = fetch_meta(app, url, title);
+    // Esperar a fetch_meta (ya lanzado en paralelo con la conversión).
+    let meta = meta_rx.recv().unwrap_or(None);
     let performing = meta.as_ref().map(|meta| meta.artist_tag.as_str());
     let album_opt = meta.as_ref().and_then(|meta| meta.album.as_deref());
     let artist_tag = performing.unwrap_or(artist_clean);
-    // Para buscar la letra se usa el artista COMPLETO ("George Birge, Kidd G,
-    // charlieonnafriday"): los colaboradores permiten reconocer la versión
-    // con feat. aunque el título de YouTube Music no la mencione, y que
-    // Musixmatch devuelva el remix (no la original) al matchear por artista.
-    let lyrics_artist = meta
-        .as_ref()
-        .map(|meta| meta.artists_for_lyrics.as_str())
-        .unwrap_or(artist_clean);
-    // El título base se pasa tal cual; fetch_lyrics busca primero cada
-    // colaborador por separado ("feat. charlieonnafriday") para que LRCLIB
-    // devuelva la versión correcta cuando el título de YT no los menciona.
-    // Si LRCLIB devuelve un título más preciso (p. ej. "Mind On You
-    // (feat. charlieonnafriday)"), ese pasa a ser el título canónico.
-    // Duración real del archivo descargado: se usa para elegir la versión
-    // correcta de la letra (original vs remix) en LRCLIB.
-    let file_duration = read_meta(std::path::Path::new(&file_path))
-        .map(|track| track.duration_sec)
-        .filter(|duration| *duration > 0);
-    // LRCLIB primero: elige la versión cuya duración coincide con la
-    // descargada (así un remix recibe la letra del remix, no la original).
-    // YouTube Music aporta su letra sincronizada (timedLyricsModel) o plana
-    // cuando las demás no cubren la canción.
-    //
-    // Las 3 fuentes de letra y la miniatura son independientes entre sí y
-    // cada una tarda segundos (varias llamadas curl; Musixmatch incluso
-    // duerme entre reintentos por rate-limit). Antes corrían EN CADENA y el
-    // tiempo se sumaba — lo que hacía lentísima la descarga (p. ej. desde
-    // un enlace de Spotify). Ahora se lanzan en PARALELO en hilos y solo se
-    // espera a la más lenta.
-    let title_is_variant = !split_variant(title).1.is_empty();
-    let (lrclib_tx, lrclib_rx) = std::sync::mpsc::channel();
-    let (ytmusic_tx, ytmusic_rx) = std::sync::mpsc::channel();
-    let (mxm_tx, mxm_rx) = std::sync::mpsc::channel();
-    let (thumb_tx, thumb_rx) = std::sync::mpsc::channel();
-    let artist_lyrics = lyrics_artist.to_string();
-    let title_lyrics = title.to_string();
-    let url_owned = url.to_string();
-    let base_thumb = base.clone();
-    let stem_thumb = stem.clone();
-    let cover_owned = cover_url.map(str::to_string);
-    let app_thumb = app.clone();
-
-    // LRCLIB.
-    let artist_l = artist_lyrics.clone();
-    let title_l = title_lyrics.clone();
-    std::thread::spawn(move || {
-        let _ = lrclib_tx.send(fetch_lyrics(&artist_l, &title_l, file_duration));
-    });
-
-    // YouTube Music: letra sincronizada (timedLyricsModel) o plana, directo
-    // desde la página del video. Solo funciona cuando la URL es de YouTube /
-    // YouTube Music (tiene videoId).
-    let video_id_opt = extract_video_id(url);
-    std::thread::spawn(move || {
-        let result = video_id_opt
-            .as_deref()
-            .and_then(fetch_ytmusic_lyrics);
-        let _ = ytmusic_tx.send(result);
-    });
-
-    // Musixmatch: sincronizada (API de escritorio) o su plana. La plana se
-    // pide solo si la sincronizada no llegó; toda la cadena vive en este
-    // hilo.
-    let artist_m = artist_lyrics.clone();
-    let title_m = title_lyrics.clone();
-    std::thread::spawn(move || {
-        let synced = fetch_musixmatch_synced_lyrics(&artist_m, &title_m, file_duration);
-        let plain = if synced.is_none() {
-            fetch_musixmatch_lyrics(&artist_m, &title_m)
-        } else {
-            None
-        };
-        let _ = mxm_tx.send((synced, plain));
-    });
-
-    // Miniatura (solo si habrá MP3 con carátula embebida): corre a la vez
-    // que las letras.
-    let thumb_thread = if has_ffmpeg && is_mp3 {
-        Some(std::thread::spawn(move || {
-            let result = match cover_owned {
-                Some(cover) if !cover.trim().is_empty() => {
-                    download_cover_url(&cover, &base_thumb, &stem_thumb)
-                }
-                _ => fetch_thumbnail(&app_thumb, &url_owned, &base_thumb, &stem_thumb),
-            };
-            let _ = thumb_tx.send(result);
-        }))
-    } else {
-        None
-    };
-
     // Esperar a las 3 fuentes de letra (la más lenta marca el total).
     let lrclib_result = lrclib_rx.recv().unwrap_or(None);
     let ytmusic_result = ytmusic_rx.recv().unwrap_or(None);
@@ -5660,11 +5865,24 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // yt-dlp se mantiene solo en segundo plano al arrancar: YouTube
-            // actualiza su sistema anti-bot seguido y un binario viejo es la
-            // causa #1 de los errores 403 al descargar.
+            // Todo el stack de descargas se precarga en segundo plano al
+            // arrancar: cuando el usuario descarga por primera vez, todo
+            // está listo (yt-dlp, Deno, ffmpeg, plugin PO Token) y la
+            // descarga arranca al instante sin esperas.
             let handle = app.handle().clone();
-            std::thread::spawn(move || auto_update_ytdlp(&handle));
+            std::thread::spawn(move || {
+                // 1) yt-dlp: actualizar a nightly si hace falta.
+                auto_update_ytdlp(&handle);
+                // 2) Deno: necesario para extraer de YouTube y generar
+                //    PO Tokens. Se descarga una sola vez (~90 MB).
+                let _ = resolve_deno(&handle);
+                // 3) ffmpeg: convertir a MP3 (~90 MB la primera vez).
+                let _ = resolve_ffmpeg(&handle);
+                // 4) Plugin PO Token: genera tokens anti-bot sin navegador.
+                if let Ok(data_dir) = handle.path().app_data_dir() {
+                    ensure_pot_plugin(&data_dir);
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
