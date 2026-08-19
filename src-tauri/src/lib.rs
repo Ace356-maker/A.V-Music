@@ -1299,6 +1299,7 @@ struct ReleaseItem {
     is_album: bool,
     browse_id: String,
     playlist_id: String,
+    cover_url: Option<String>,
 }
 
 /// Trae la discografía COMPLETA de un artista (todos los álbumes y
@@ -1432,12 +1433,23 @@ fn release_from_two_row(renderer: &serde_json::Value) -> Option<ReleaseItem> {
     // (menú / botón de play): se busca el primer valor que empiece por ese
     // prefijo, así el esquema puede cambiar sin romper la extracción.
     let playlist_id = find_playlist_id(renderer);
+    // La carátula del lanzamiento (square, de YT Music): la imagen más
+    // grande del array de thumbnails. Se usa como coverUrl en las pistas
+    // en vez del mqdefault.jpg del vídeo (que es 16:9 y a veces trae
+    // barras negras).
+    let cover_url = renderer
+        .pointer("/thumbnail/musicThumbnailRenderer/thumbnail/thumbnails")
+        .and_then(|t| t.as_array())
+        .and_then(|arr| arr.last())
+        .and_then(|t| t.get("url")?.as_str())
+        .map(|url| url.to_string());
     Some(ReleaseItem {
         title: decode_html_entities(&title),
         year,
         is_album: subtitle.to_lowercase().contains("lbum"),
         browse_id,
         playlist_id: playlist_id.unwrap_or_default(),
+        cover_url,
     })
 }
 
@@ -1790,16 +1802,23 @@ fn build_artist_response(
         let Some(tracks) = &tracklists[index] else {
             continue;
         };
+        // Usar la carátula REAL del álbum/sencillo (cuadrada, de YT Music)
+        // en vez del mqdefault.jpg del vídeo (16:9, a veces con barras).
+        let mut hits = tracks.clone();
+        if let Some(ref cover) = release.cover_url {
+            for hit in &mut hits {
+                hit.thumbnail = cover.clone();
+            }
+        }
         if release.is_album {
             album_groups.push(ArtistAlbum {
                 title: release.title.clone(),
                 year: release.year.clone(),
-                tracks: tracks.clone(),
+                tracks: hits,
             });
         } else {
             // La fila de un sencillo no trae columna de artistas: se usa el
             // nombre del artista (el del canal oficial).
-            let mut hits = tracks.clone();
             for hit in &mut hits {
                 if hit.artists.is_empty() {
                     hit.artists.push(artist_name.to_string());

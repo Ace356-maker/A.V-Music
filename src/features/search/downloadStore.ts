@@ -28,6 +28,8 @@ export interface SearchHit {
   /** Intérpretes reales (p. ej. ["George Birge", "Kidd G", "charlieonnafriday"])
    * para mostrarlos completos como YT Music. Vacío si el origen no los trae. */
   artists?: string[];
+  /** Álbum al que pertenece la pista (solo en discografía de artista). */
+  _album?: string;
 }
 
 /** Un álbum de la discografía de un artista: título, año y sus canciones

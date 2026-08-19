@@ -55,6 +55,16 @@
 
 ---
 
+## 🆕 Lo nuevo en v0.7.4
+
+- **Discografía con cabeceras de álbum:** al buscar un artista, cada álbum aparece con su nombre y conteo de canciones — los sencillos van aparte al final.
+- **Carátulas reales del álbum:** las miniaturas ahora vienen de YouTube Music (cuadradas, sin bordes) en vez del `mqdefault.jpg` del vídeo (16:9 con barras).
+- **Deduplicación inteligente:** una canción que aparece en múltiples álbumes solo se muestra una vez. El conteo por álbum es preciso.
+- **Toggle mostrar/ocultar repetidas:** botón al lado del mensaje de discografía para ver todas las canciones o solo las únicas.
+- **VirtualList con alturas variables:** soporte para filas de diferentes tamaños (cabeceras de álbum + pistas).
+
+---
+
 ## 🆕 Lo nuevo en v0.7.3
 
 - **Descargas 3x más rápidas:** hasta 3 descargas en paralelo, metadata/letras/miniatura en paralelo con la conversión a MP3 — antes todo era secuencial.

@@ -25,8 +25,10 @@ import {
 
 interface VirtualListProps<T> {
   items: T[];
-  /** Alto exacto de cada fila en píxeles. */
+  /** Alto exacto de cada fila en píxeles (usado si getRowHeight no se provee). */
   rowHeight: number;
+  /** Altura variable por item: si se provee, reemplaza rowHeight para cada fila. */
+  getRowHeight?: (item: T, index: number) => number;
   renderItem: (item: T, index: number) => ReactNode;
   getKey?: (item: T, index: number) => string | number;
   /** Clases del contenedor scrolleable (debe incluir overflow-y-auto). */
@@ -57,6 +59,7 @@ const MemoRow = memo(function MemoRow(props: {
 export function VirtualList<T>({
   items,
   rowHeight,
+  getRowHeight,
   renderItem,
   getKey,
   className,
@@ -67,6 +70,16 @@ export function VirtualList<T>({
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
+
+  // Prefix sum de alturas para posicionar filas con altura variable.
+  const heights = items.map((item, i) => getRowHeight?.(item, i) ?? rowHeight);
+  const offsets = useRef<number[]>([]);
+  let cumulative = 0;
+  for (let i = 0; i < heights.length; i++) {
+    offsets.current[i] = cumulative;
+    cumulative += heights[i];
+  }
+  const totalHeight = cumulative;
 
   // El scroll se alinea al fotograma: los eventos de scroll pueden llegar
   // varias veces por frame y no vale la pena re-renderizar más que una.
@@ -104,10 +117,11 @@ export function VirtualList<T>({
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container || initialScrollIndex == null) return;
-    const top = initialScrollIndex * rowHeight;
-    const bottom = top + rowHeight;
+    const h = heights[initialScrollIndex] ?? rowHeight;
+    const top = offsets.current[initialScrollIndex] ?? 0;
+    const bottom = top + h;
     if (top < container.scrollTop || bottom > container.scrollTop + container.clientHeight) {
-      container.scrollTop = Math.max(0, top + rowHeight / 2 - container.clientHeight / 2);
+      container.scrollTop = Math.max(0, top + h / 2 - container.clientHeight / 2);
     }
     // Solo al montar: los cambios de la pista actual no re-posicionan.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,10 +138,22 @@ export function VirtualList<T>({
     if (container) container.scrollTop = 0;
   }, [firstItemKey, resetOnItemsChange]);
 
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  // Buscar el primer/último índice visible con binary search en el
+  // prefix sum de offsets (O(log n) en vez de O(n)).
+  const findIndex = (y: number): number => {
+    let lo = 0;
+    let hi = offsets.current.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (offsets.current[mid] + (heights[mid] ?? rowHeight) <= y) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const start = Math.max(0, findIndex(scrollTop) - overscan);
   const end = Math.min(
     items.length,
-    Math.ceil((scrollTop + viewport) / rowHeight) + overscan,
+    findIndex(scrollTop + viewport) + 1 + overscan,
   );
 
   const visible: number[] = [];
@@ -139,16 +165,16 @@ export function VirtualList<T>({
       onScroll={handleScroll}
       className={className}
     >
-      <div style={{ position: "relative", height: items.length * rowHeight }}>
+      <div style={{ position: "relative", height: totalHeight }}>
         {visible.map((index) => (
           <div
             key={getKey ? getKey(items[index], index) : index}
             style={{
               position: "absolute",
-              top: index * rowHeight,
+              top: offsets.current[index] ?? 0,
               left: 0,
               right: 0,
-              height: rowHeight,
+              height: heights[index] ?? rowHeight,
             }}
           >
             <MemoRow item={items[index]} index={index} renderItem={renderItem} />

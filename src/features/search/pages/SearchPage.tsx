@@ -26,6 +26,21 @@ import {
 
 /** Alto de cada fila de resultados (contenido 40 px + py-3 24 px). */
 const ROW_HEIGHT = 64;
+/** Alto de una cabecera de álbum (texto + padding). */
+const HEADER_HEIGHT = 44;
+
+/** Elemento de la lista mixta: cabecera de álbum o pista. */
+interface HeaderItem {
+  _kind: "header";
+  title: string;
+  year: string;
+  count: number;
+}
+interface TrackItem {
+  _kind: "track";
+  hit: SearchHit;
+}
+type SearchItem = HeaderItem | TrackItem;
 
 /**
  * Caché local de enlaces resueltos (link → hit de YouTube): resolver un
@@ -233,6 +248,12 @@ export default function SearchPage() {
   const [error, setError] = useState<string | null>(null);
   // El diálogo de elegir carpeta está abierto (para mostrar "Cambiando…").
   const [picking, setPicking] = useState(false);
+  // Mostrar todas las canciones (incluidas las que están duplicadas entre
+  // álbumes y sencillos). Por defecto false: solo canciones únicas.
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  // Resultados sin filtrar (todas las canciones, incluidas repetidas):
+  // se usa como fuente de verdad para re-filtrar al cambiar el toggle.
+  const rawResultsRef = useRef<SearchHit[] | null>(null);
   // Carpeta de descargas: se elige con el botón "Cambiar carpeta" y se
   // recuerda entre sesiones. Si es null, el backend usa la predeterminada
   // (Descargas\A.V Music).
@@ -331,18 +352,54 @@ export default function SearchPage() {
    * de un enlace de canal) como lista plana: álbumes con sus canciones en
    * orden y sencillos al final, con carátula y duración como una búsqueda
    * normal (sin cabeceras de álbum). El mensaje va sin ":" ni "·". */
-  function applyArtistDiscography(query: string, resp: SearchResponse): void {
-    const albumTracks = resp.albums.flatMap((album) => album.tracks);
+  /**
+   * Aplica deduplicación a los resultados crudos según el toggle.
+   * Devuelve las canciones únicas (por título normalizado) o todas.
+   */
+  function applyDedup(raw: SearchHit[]): SearchHit[] {
+    if (showDuplicates) return raw;
+    const seen = new Set<string>();
+    return raw.filter((hit) => {
+      const key = normalize(hit.title);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function applyArtistDiscography(q: string, resp: SearchResponse): void {
+    // Construir lista de tracks con dedup y tag de álbum.
+    const tracks: SearchHit[] = [];
+    const seenTitles = new Set<string>();
+    for (const album of resp.albums) {
+      for (const hit of album.tracks) {
+        const key = normalize(hit.title);
+        if (seenTitles.has(key)) continue;
+        seenTitles.add(key);
+        tracks.push({ ...hit, _album: album.title });
+      }
+    }
+    for (const hit of resp.singles) {
+      const key = normalize(hit.title);
+      if (seenTitles.has(key)) continue;
+      seenTitles.add(key);
+      tracks.push(hit);
+    }
+    const omitted =
+      resp.albums.reduce((s, a) => s + a.tracks.length, 0)
+      + resp.singles.length
+      - tracks.length;
+    rawResultsRef.current = tracks;
     downloadStore.setSession({
-      query,
-      results: [...albumTracks, ...resp.singles],
+      query: q,
+      results: tracks,
       isPlaylist: false,
       selected: new Set(),
     });
     void validateDownloaded();
-    const albumCount = resp.albums.reduce((sum, album) => sum + album.tracks.length, 0);
+    const dedupMsg = omitted > 0 ? ` (${omitted} repetidas omitidas)` : "";
     setMessage(
-      `Discografía de ${resp.artistName}, ${resp.albums.length} álbumes (${albumCount} canciones) y ${resp.singles.length} sencillos`,
+      `Discografía de ${resp.artistName}: ${tracks.length} canciones${dedupMsg}`,
     );
   }
 
@@ -367,6 +424,8 @@ export default function SearchPage() {
     downloadStore.setSession({ searching: true, searchDone: false });
     setError(null);
     setMessage(null);
+    setShowDuplicates(false);
+    rawResultsRef.current = null;
     try {
       if (PLAYLIST_RE.test(q)) {
         // Es un enlace de playlist: se listan sus canciones y cada una se
@@ -432,9 +491,10 @@ export default function SearchPage() {
         // con sus canciones en orden y los sencillos al final).
         applyArtistDiscography(q, resp);
       } else {
+        rawResultsRef.current = resp.songs;
         downloadStore.setSession({
           query: q,
-          results: resp.songs,
+          results: applyDedup(resp.songs),
         });
         void validateDownloaded();
         if (resp.songs.length === 0) {
@@ -805,7 +865,7 @@ export default function SearchPage() {
           espacio SIEMPRE reservado: al quitarlo o al buscar otra cosa la
           vista no salta. Alineado con "Buscar" y la lista (px-4) para que
           todo arranque en la misma columna. */}
-      <div className="flex min-h-6 items-center px-4">
+      <div className="flex min-h-6 items-center gap-3 px-4">
         {error && (
           <p
             className={cn(
@@ -819,9 +879,39 @@ export default function SearchPage() {
         {/* Una sola línea SIEMPRE (truncate): el mensaje nunca hace saltar
             la lista. */}
         {message && (
-          <p className="truncate text-sm text-muted">
+          <p className="min-w-0 truncate text-sm text-muted">
             {message}
           </p>
+        )}
+        {/* Toggle para mostrar/ocultar canciones duplicadas: solo aparece
+            cuando hay resultados filtrados (crudos > visibles). */}
+        {rawResultsRef.current && rawResultsRef.current.length > (results?.length ?? 0) && (
+          <button
+            type="button"
+            onClick={() => {
+              const raw = rawResultsRef.current;
+              if (!raw) return;
+              if (showDuplicates) {
+                // Pasar de "mostrar todas" a "ocultar repetidas":
+                // re-filtrar con dedup.
+                const seen = new Set<string>();
+                const filtered = raw.filter((hit) => {
+                  const key = normalize(hit.title);
+                  if (seen.has(key)) return false;
+                  seen.add(key);
+                  return true;
+                });
+                downloadStore.setSession({ results: filtered });
+              } else {
+                // Pasar de "ocultar" a "mostrar todas": usar crudos.
+                downloadStore.setSession({ results: raw });
+              }
+              setShowDuplicates((prev) => !prev);
+            }}
+            className="shrink-0 rounded-sm border border-rule-strong/40 px-2 py-0.5 text-[11px] text-faint transition-colors hover:border-muted hover:text-muted"
+          >
+            {showDuplicates ? "Ocultar repetidas" : `Mostrar todas (${rawResultsRef.current.length})`}
+          </button>
         )}
       </div>
 
@@ -867,14 +957,69 @@ export default function SearchPage() {
         </div>
       )}
 
-      {results && results.length > 0 && (
+      {results && results.length > 0 && (() => {
+        // Construir lista mixta (cabeceras de álbum + pistas) para la
+        // virtualización: se re-calcula cuando cambian los resultados.
+        const items: SearchItem[] = [];
+        let lastAlbum: string | null = null;
+        let addedSinglesHeader = false;
+        const seenIds = new Set<string>();
+        for (const hit of results) {
+          const h = hit as SearchHit;
+          if (seenIds.has(h.id)) continue;
+          seenIds.add(h.id);
+          const album = h._album;
+          if (album && album !== lastAlbum) {
+            items.push({ _kind: "header", title: album, year: "", count: 0 });
+            lastAlbum = album;
+          } else if (!album && !addedSinglesHeader) {
+            items.push({ _kind: "header", title: "Sencillos", year: "", count: 0 });
+            addedSinglesHeader = true;
+          }
+          items.push({ _kind: "track", hit: h });
+        }
+        // Rellenar conteos: cabeceras de álbum cuentan solo pistas con
+        // _album === title; "Sencillos" cuenta solo pistas sin _album.
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item._kind !== "header") continue;
+          const isSingles = item.title === "Sencillos";
+          let count = 0;
+          for (let j = i + 1; j < items.length; j++) {
+            const next = items[j];
+            if (next._kind === "header") break;
+            if (isSingles) {
+              if (!next.hit._album) count++;
+            } else {
+              if (next.hit._album === item.title) count++;
+            }
+          }
+          item.count = count;
+        }
+        return (
         <VirtualList
-          items={results}
+          items={items}
           rowHeight={ROW_HEIGHT}
-          getKey={(hit) => hit.id}
+          getRowHeight={(item) => (item._kind === "header" ? HEADER_HEIGHT : ROW_HEIGHT)}
+          getKey={(item) => (item._kind === "header" ? `h-${item.title}` : item.hit.id)}
           resetOnItemsChange
           className="min-h-0 flex-1 overflow-y-auto rounded-sm"
-          renderItem={(hit) => {
+          renderItem={(item) => {
+          if (item._kind === "header") {
+            return (
+              <div className="flex h-full flex-col justify-center gap-1 px-4 pt-1">
+                <div className="flex items-baseline gap-2">
+                  <p className="truncate text-sm font-bold text-ink">
+                    {item.title}
+                  </p>
+                  <span className="shrink-0 text-xs font-medium text-muted">
+                    {item.year ? `${item.year} · ` : ""}{item.count} {item.count === 1 ? "canción" : "canciones"}
+                  </span>
+                </div>
+              </div>
+            );
+          }
+          const hit = item.hit;
             // La fila puede estar descargando su versión Topic (con otra id):
             // el progreso y el estado activo se miran contra ese destino.
             const target = topicTarget(results, hit);
@@ -931,15 +1076,17 @@ export default function SearchPage() {
                 )}
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                   {hit.thumbnail ? (
-                    <img
-                      src={hit.thumbnail}
-                      alt=""
-                      loading="lazy"
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                      }}
-                      className="h-10 w-10 shrink-0 rounded-sm object-cover"
-                    />
+                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded-sm">
+                      <img
+                        src={hit.thumbnail}
+                        alt=""
+                        loading="lazy"
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                        }}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
                   ) : (
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-panel-2 text-faint">
                       <IconMusic aria-hidden="true" size={16} stroke={1.5} />
@@ -1030,7 +1177,8 @@ export default function SearchPage() {
             );
           }}
         />
-      )}
+        );
+      })()}
 
     </div>
   );
