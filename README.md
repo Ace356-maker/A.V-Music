@@ -55,54 +55,6 @@
 
 ---
 
-## 🆕 Lo nuevo en v0.7.4
-
-- **Discografía con cabeceras de álbum:** al buscar un artista, cada álbum aparece con su nombre y conteo de canciones — los sencillos van aparte al final.
-- **Carátulas reales del álbum:** las miniaturas ahora vienen de YouTube Music (cuadradas, sin bordes) en vez del `mqdefault.jpg` del vídeo (16:9 con barras).
-- **Deduplicación inteligente:** una canción que aparece en múltiples álbumes solo se muestra una vez. El conteo por álbum es preciso.
-- **Toggle mostrar/ocultar repetidas:** botón al lado del mensaje de discografía para ver todas las canciones o solo las únicas.
-- **VirtualList con alturas variables:** soporte para filas de diferentes tamaños (cabeceras de álbum + pistas).
-
----
-
-## 🆕 Lo nuevo en v0.7.3
-
-- **Descargas 3x más rápidas:** hasta 3 descargas en paralelo, metadata/letras/miniatura en paralelo con la conversión a MP3 — antes todo era secuencial.
-- **Anti-403 real con PO Token:** el plugin `bgutil-ytdlp-pot-provider` se descarga solo y genera tokens anti-bot sin configuración. YouTube acepta las peticiones como si vinieran de un navegador real.
-- **yt-dlp nightly automático:** se usa la versión nightly (más reciente) en vez de la estable — con fixes de "page needs to be reloaded" y otros bloqueos de YouTube.
-- **Cookies del navegador en background:** detecta Chrome/Edge/Firefox y pasa sus cookies a yt-dlp sin abrir el navegador. No es obligatorio — el PO Token ya bastaría solo.
-- **Fallback inteligente:** si el primer intento falla, rota automáticamente entre diferentes player clients (mweb, web_safari) hasta encontrar uno que funcione.
-- **Primera descarga instantánea:** ffmpeg, Deno, yt-dlp y el plugin PO Token se precargan al arrancar la app. La primera vez que descargas no hay espera.
-- **Timeout de stall ampliado:** de 30s a 60s — más margen para conexiones lentas o WiFi inestable.
-- **Fix del botón de búsqueda:** ya no se queda pegado con check cuando buscaste por nombre y luego pegas un enlace.
-- **Validación de archivos descargados:** si yt-dlp devuelve un HTML de error en vez de audio, se detecta y se reintenta (< 10 KB = no es audio válido).
-
----
-
-## 🆕 Lo nuevo en v0.7.2
-
-- **Transiciones del reproductor ahora van por GPU:** clip-path y translateX reemplazan a width y margin-right en las animaciones del panel — cero reflow, cero costo de CPU.
-
----
-
-## 🆕 Lo nuevo en v0.7.1
-
-- **Reproductor maximizado afinado:** al cerrar la letra, el transporte se desliza y queda centrado debajo de la carátula grande — siempre alineado con lo que suena.
-- **Columna de pista en modo letra:** mini carátula, título y artista aparecen en el panel de reproducción solo con la letra abierta, sin duplicar lo que ya muestra la carátula grande.
-- **Volumen y minimizar al borde:** los controles se anclan al extremo derecho del panel y no roban espacio al transporte.
-
----
-
-## 🆕 Lo nuevo en v0.7.0
-
-- **Playlists propias:** crea, llena y organiza playlists desde el sidebar y el clic derecho de cualquier pista — sin un solo modal.
-- **Modal de actualización rediseñado:** tarjeta translúcida casi negra con progreso en blanco y animación de entrada suave.
-- **Reproductor maximizado afinado:** panel a todo el ancho, botones más grandes y mejor separados, selector de letras siempre visible.
-- **Menos consumo de CPU:** arreglado el bucle de auto-scroll de letras al terminar la canción (el ♪ del outro ya no come CPU).
-- **Sin tooltips:** la interfaz se explica sola; se eliminaron todos los tooltips nativos.
-
----
-
 ## 🛠️ Stack Tecnológico
 
 <p align="center">
