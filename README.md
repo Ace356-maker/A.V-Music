@@ -36,7 +36,7 @@
     <td width="50%"><strong>🔍 Búsqueda y enlaces inteligentes</strong><br />Pega cualquier enlace de <strong>YouTube Music</strong> o <strong>Spotify</strong> y se resuelve el título exacto con los intérpretes reales. Busca un artista y aparece su <strong>discografía completa</strong>.</td>
   </tr>
   <tr>
-    <td><strong>⬇️ Descargas en paralelo</strong><br />Varias canciones a la vez, cada una con su cola y su progreso en vivo. Playlists también, hasta 3 simultáneas.</td>
+    <td><strong>⬇️ Descargas en paralelo</strong><br />Hasta 3 canciones a la vez con su cola y progreso en vivo. Playlists también, sin esperas innecesarias.</td>
     <td><strong>🎶 MP3 V0 con todo dentro</strong><br />Portada oficial, etiquetas ID3v2 completas y letras sincronizadas (LRC/USLT) embebidas en el propio archivo.</td>
   </tr>
   <tr>
@@ -44,14 +44,28 @@
     <td><strong>📁 Tus propias playlists</strong><br />Crea y organiza playlists con clic derecho sobre cualquier canción — sin modales, sin fricción. Se guardan en tu disco.</td>
   </tr>
   <tr>
-    <td><strong>🛡️ Descargas a prueba de bloqueos</strong><br /><code>yt-dlp</code> se mantiene actualizado solo y ante un 403 la app reintenta, refresca el binario y te explica el motivo en cristiano.</td>
+    <td><strong>🛡️ Descargas a prueba de bloqueos</strong><br /><code>yt-dlp</code> se actualiza solo (nightly) y usa PO Token anti-bot + cookies del navegador para evitar el 403 de YouTube.</td>
     <td><strong>🔄 Auto-actualización fluida</strong><br />Comprueba y descarga nuevas versiones en segundo plano, con un modal claro y una cuenta regresiva de 5 segundos antes de aplicar.</td>
   </tr>
   <tr>
     <td><strong>🛡️ 100 % privado y offline</strong><br />Sin cuentas, sin rastreo y sin nube. Todos tus archivos permanecen en tu disco local.</td>
-    <td><strong>🚀 Cero configuración</strong><br /><code>yt-dlp</code> y <code>ffmpeg</code> se descargan y gestionan de forma transparente cuando se necesitan.</td>
+    <td><strong>🚀 Cero configuración</strong><br /><code>yt-dlp</code>, <code>ffmpeg</code>, <code>Deno</code> y el plugin PO Token se descargan y gestionan de forma transparente al arrancar la app.</td>
   </tr>
 </table>
+
+---
+
+## 🆕 Lo nuevo en v0.7.3
+
+- **Descargas 3x más rápidas:** hasta 3 descargas en paralelo, metadata/letras/miniatura en paralelo con la conversión a MP3 — antes todo era secuencial.
+- **Anti-403 real con PO Token:** el plugin `bgutil-ytdlp-pot-provider` se descarga solo y genera tokens anti-bot sin configuración. YouTube acepta las peticiones como si vinieran de un navegador real.
+- **yt-dlp nightly automático:** se usa la versión nightly (más reciente) en vez de la estable — con fixes de "page needs to be reloaded" y otros bloqueos de YouTube.
+- **Cookies del navegador en background:** detecta Chrome/Edge/Firefox y pasa sus cookies a yt-dlp sin abrir el navegador. No es obligatorio — el PO Token ya bastaría solo.
+- **Fallback inteligente:** si el primer intento falla, rota automáticamente entre diferentes player clients (mweb, web_safari) hasta encontrar uno que funcione.
+- **Primera descarga instantánea:** ffmpeg, Deno, yt-dlp y el plugin PO Token se precargan al arrancar la app. La primera vez que descargas no hay espera.
+- **Timeout de stall ampliado:** de 30s a 60s — más margen para conexiones lentas o WiFi inestable.
+- **Fix del botón de búsqueda:** ya no se queda pegado con check cuando buscaste por nombre y luego pegas un enlace.
+- **Validación de archivos descargados:** si yt-dlp devuelve un HTML de error en vez de audio, se detecta y se reintenta (< 10 KB = no es audio válido).
 
 ---
 
@@ -88,7 +102,7 @@
   <img src="https://img.shields.io/badge/Tauri%202-2A203B?style=flat&labelColor=0E0718" alt="Tauri 2" />
   <img src="https://img.shields.io/badge/Tailwind%20CSS%20v4-574C6D?style=flat&logo=tailwindcss&logoColor=white&labelColor=0E0718" alt="Tailwind CSS v4" />
   <img src="https://img.shields.io/badge/Vite%206-393049?style=flat&logo=vite&logoColor=white&labelColor=0E0718" alt="Vite 6" />
-  <img src="https://img.shields.io/badge/yt--dlp-1D162A?style=flat&labelColor=0E0718" alt="yt-dlp" />
+  <img src="https://img.shields.io/badge/yt--dlp%20nightly-1D162A?style=flat&labelColor=0E0718" alt="yt-dlp nightly" />
   <img src="https://img.shields.io/badge/ffmpeg-1D162A?style=flat&labelColor=0E0718" alt="ffmpeg" />
   <img src="https://img.shields.io/badge/pnpm-9364FF?style=flat&logo=pnpm&logoColor=white&labelColor=0E0718" alt="pnpm" />
 </p>
@@ -97,7 +111,7 @@
 | :--- | :--- |
 | **Frontend** | React 19, TypeScript (Strict), Tailwind CSS v4, Vite 6 |
 | **Audio & UI Engine** | Web Audio API + HTML5 Audio Driver, React State Management |
-| **Backend & Core** | Rust (Tauri 2), `lofty` (metadatos audio), `rfd` (diálogos nativos), `walkdir`, subprocesos optimizados `yt-dlp` & `ffmpeg` |
+| **Backend & Core** | Rust (Tauri 2), `lofty` (metadatos audio), `rfd` (diálogos nativos), `walkdir`, subprocesos optimizados `yt-dlp` (nightly) & `ffmpeg` |
 | **Paquetes** | pnpm |
 
 ---
@@ -125,7 +139,7 @@ toda la UI. Paleta definida en tokens OKLCH (Tailwind v4):
 ## ⬇️ Descarga e Instalación
 
 1. Ve a la sección de **[Releases del repositorio](https://github.com/Ace356-maker/A.V-Music/releases/latest)**.
-2. Descarga el instalador `A.V.Music_x64-setup.exe` de la **última versión (v0.7.2)**.
+2. Descarga el instalador `A.V.Music_x64-setup.exe` de la **última versión**.
 3. Ejecútalo: la aplicación se instala y se mantiene actualizada de forma
    100 % automática en futuras versiones.
 
